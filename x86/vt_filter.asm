@@ -179,7 +179,8 @@ INIT_ZMM avx512
 VT_U16
 
 ; void vt_filter_line_f32(void *dst, const void *const *src, int width, int peak)
-; mulps+addps in ascending tap order: bit-identical to the scalar sum
+; ascending tap order; AVX2 up uses FMA (one rounding fewer per tap, so a few
+; ulp from the C sum and slightly more accurate), SSE2 matches C bit-exactly
 %macro VT_F32 0
 cglobal vt_filter_line_f32, 3, 8, 3, dst, src, w, x, k, ptra, coef, rem
     lea       coefq, [vt_coefs_f32]
@@ -194,13 +195,14 @@ cglobal vt_filter_line_f32, 3, 8, 3, dst, src, w, x, k, ptra, coef, rem
     mov       ptraq, [srcq + kq*8]
 %if mmsize >= 32
     vbroadcastss m1, [coefq + kq*4]
+    vfmadd231ps  m0, m1, [ptraq + xq]
 %else
     movss        m1, [coefq + kq*4]
     shufps       m1, m1, 0
-%endif
     movups       m2, [ptraq + xq]
     mulps        m2, m1
     addps        m0, m2
+%endif
     add          kq, 1
     cmp          kq, 95
     jl .kloop

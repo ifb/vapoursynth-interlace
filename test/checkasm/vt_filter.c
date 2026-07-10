@@ -89,8 +89,14 @@ static void test_f32(void)
             memset(dst_a, 0x55, sizeof(dst_a));
             checkasm_call_ref(dst_c, ptrs, widths[i], 0);
             checkasm_call_new(dst_a, ptrs, widths[i], 0);
-            /* mul+add in scalar order: results must be bit-identical */
-            checkasm_check1d(uint32_t, (uint32_t *)dst_c, (uint32_t *)dst_a, widths[i], "dst");
+            /* AVX2 up accumulates with FMA: one rounding fewer per tap than
+               the C sum, so compare with a small ULP budget */
+            const float *fc = (const float *)dst_c, *fa = (const float *)dst_a;
+            for (int j = 0; j < widths[i]; j++)
+                if (!checkasm_float_near_abs_eps_ulp(fc[j], fa[j], 2e-6f, 64)) {
+                    checkasm_fail_func("dst[%d]: %.9g vs %.9g", j, fc[j], fa[j]);
+                    break;
+                }
         }
         setup_ptrs(ptrs, 0, 4);
         checkasm_bench_new(dst_a, ptrs, 1920, 0);

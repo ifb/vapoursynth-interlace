@@ -33,9 +33,11 @@ is set and frame durations doubled.
   the host supports. Levels the hardware lacks are simply not used.
 
 Same filter on all planes (per WHP 230); zero phase, so no chroma/luma
-timing shift. SSE2/AVX2/AVX-512 kernels are selected at runtime and produce
-bit-identical output to the C implementation, floats included.
-
+timing shift. SSE2/AVX2/AVX-512 selected at runtime. Integer output is
+bit-identical to the C implementation on every path. Float paths use FMA
+on AVX2 and above, so float output can differ from C by a few ulp
+(~1e-6 relative). The fused sum skips one rounding per tap and is the more
+accurate of the two.
 
 ## Building
 
