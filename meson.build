@@ -13,7 +13,7 @@ incdir = include_directories(
 )
 
 shared_module('interlace',
-    files('src/interlace.c'),
+    files('src/interlace.c', 'src/vt_filter.c'),
     gnu_symbol_visibility: 'hidden',
     include_directories: incdir,
     install: true,
