@@ -11,9 +11,6 @@ pw_8000: times 32 dw 0x8000
 
 SECTION .text
 
-cextern vt_coefs_i16 ; int16_t[96], flat [t][v], padded with 0
-cextern vt_coefs_f32 ; float[95]
-
 ; log2 of the vector byte width
 %define LOG2M (4 + (mmsize == 32) + 2 * (mmsize == 64))
 
@@ -56,12 +53,12 @@ cextern vt_coefs_f32 ; float[95]
 %endif
 %endmacro
 
-; void vt_filter_line_u8(void *dst, const void *const *src, int width, int peak)
+; void vt_filter_line_u8(void *dst, const void *const *src, int width, int peak,
+;                        const void *coefs)
 ; src has VT_SRC_PTRS (96) entries; coefficients consumed as 48 pmaddwd pairs.
 ; peak is implied (packuswb).
 %macro VT_U8 0
-cglobal vt_filter_line_u8, 3, 9, 12, dst, src, w, x, k, ptra, ptrb, coef, rem
-    lea       coefq, [vt_coefs_i16]
+cglobal vt_filter_line_u8, 5, 10, 12, dst, src, w, peak, coef, x, k, ptra, ptrb, rem
     TAIL_MASK kxnorq, kmovq, ptraq, ptraq, LOG2M
     add          wd, mmsize - 1
     shr          wd, LOG2M
@@ -119,12 +116,12 @@ VT_U8
 INIT_ZMM avx512
 VT_U8
 
-; void vt_filter_line_u16(void *dst, const void *const *src, int width, int peak)
+; void vt_filter_line_u16(void *dst, const void *const *src, int width, int peak,
+;                        const void *coefs)
 ; pixels are biased to i16 for pmaddwd; sum(coefs) = 1<<13 makes the bias
 ; correction cancel against the post-shift unbias, so only rounding remains
 %macro VT_U16 0
-cglobal vt_filter_line_u16, 4, 10, 9, dst, src, w, peak, x, k, ptra, ptrb, coef, rem
-    lea       coefq, [vt_coefs_i16]
+cglobal vt_filter_line_u16, 5, 11, 9, dst, src, w, peak, coef, x, k, ptra, ptrb, rem
     mova         m6, [pw_8000]
     sub       peakd, 32768
     movd        xm8, peakd
@@ -178,12 +175,12 @@ VT_U16
 INIT_ZMM avx512
 VT_U16
 
-; void vt_filter_line_f32(void *dst, const void *const *src, int width, int peak)
+; void vt_filter_line_f32(void *dst, const void *const *src, int width, int peak,
+;                        const void *coefs)
 ; ascending tap order; AVX2 up uses FMA (one rounding fewer per tap, so a few
 ; ulp from the C sum and slightly more accurate), SSE2 matches C bit-exactly
 %macro VT_F32 0
-cglobal vt_filter_line_f32, 3, 8, 3, dst, src, w, x, k, ptra, coef, rem
-    lea       coefq, [vt_coefs_f32]
+cglobal vt_filter_line_f32, 5, 9, 3, dst, src, w, peak, coef, x, k, ptra, rem
     TAIL_MASK kxnorw, kmovw, ptraq, ptrad, LOG2M - 2
     add          wd, mmsize/4 - 1
     shr          wd, LOG2M - 2
@@ -220,12 +217,12 @@ VT_F32
 INIT_ZMM avx512
 VT_F32
 
-; void vt_filter_line_f16(void *dst, const void *const *src, int width, int peak)
+; void vt_filter_line_f16(void *dst, const void *const *src, int width, int peak,
+;                        const void *coefs)
 ; F16C convert on load, f32 FMA accumulation in scalar tap order,
 ; round-to-nearest-even store. AVX2 up only; the C fallback covers the rest.
 %macro VT_F16 0
-cglobal vt_filter_line_f16, 3, 8, 3, dst, src, w, x, k, ptra, coef, rem
-    lea       coefq, [vt_coefs_f32]
+cglobal vt_filter_line_f16, 5, 9, 3, dst, src, w, peak, coef, x, k, ptra, rem
     TAIL_MASK kxnorw, kmovw, ptraq, ptrad, LOG2M - 2
     add          wd, mmsize/4 - 1
     shr          wd, LOG2M - 2

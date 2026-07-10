@@ -25,7 +25,18 @@ struct p2i_filter_t {
     int tff;
     int filter;
     int peak;
+    int kind;
+    int chroma_sited;   /* vertically subsampled chroma: correct its siting */
     vt_filter_line_fn vt_filter_line;
+};
+
+/* interlaced 4:2:0 sites field chroma at 1/4 and 3/4 between the field's luma
+ * lines; the shift from the progressive position depends on the progressive
+ * vertical siting class of _ChromaLocation. In chroma rows, y[r] = x[r+s]. */
+static const int chroma_shift[3][2] = { /* [vclass][bottom] */
+    { P2I_SHIFT_M125, P2I_SHIFT_P125 }, /* left/center: chroma between lines */
+    { P2I_SHIFT_P125, P2I_SHIFT_P375 }, /* topleft/top: co-sited with line 0 */
+    { P2I_SHIFT_M375, P2I_SHIFT_M125 }, /* bottomleft/bottom */
 };
 
 static const VSFrame *VS_CC p2i_get_frame(int n, int activation_reason, void *instance_data,
@@ -66,6 +77,24 @@ static const VSFrame *VS_CC p2i_get_frame(int n, int activation_reason, void *in
     const VSFrame *top    = f->tff ? first : second;
     const VSFrame *bottom = f->tff ? second : first;
 
+    int err;
+    int64_t cloc = 0;
+    const void *chroma_coefs[2] = { NULL, NULL };
+    if (f->chroma_sited) {
+        cloc = vsapi->mapGetInt(vsapi->getFramePropertiesRO(first), "_ChromaLocation", 0, &err);
+        if (err)
+            cloc = VSC_CHROMA_LEFT;
+        if (cloc < 0 || cloc > VSC_CHROMA_BOTTOM) {
+            vsapi->setFilterError("Interlace: unsupported _ChromaLocation", frame_ctx);
+            for (int k = 0; k < WINDOW; k++)
+                vsapi->freeFrame(src[k]);
+            return NULL;
+        }
+        /* left/center 0,1 -> vclass 0; topleft/top 2,3 -> 1; bottom* 4,5 -> 2 */
+        for (int b = 0; b < 2; b++)
+            chroma_coefs[b] = p2i_vt_coefs(f->kind, chroma_shift[cloc >> 1][b]);
+    }
+
     VSFrame *dst = vsapi->newVideoFrame(&f->vi.format, f->vi.width, f->vi.height, first, core);
 
     for (int plane = 0; plane < f->vi.format.numPlanes; plane++) {
@@ -95,6 +124,8 @@ static const VSFrame *VS_CC p2i_get_frame(int n, int activation_reason, void *in
 
         /* output line r = progressive line r of the frame supplying that
            field, VT-filtered; line edges repeated */
+        const void *center = p2i_vt_coefs(f->kind, P2I_SHIFT_CENTER);
+        int sited = plane > 0 && f->chroma_sited;
         int top_off = f->tff ? 0 : 1;
         for (int r = 0; r < rows; r++) {
             int o = (r & 1) ? !top_off : top_off;
@@ -105,14 +136,17 @@ static const VSFrame *VS_CC p2i_get_frame(int n, int activation_reason, void *in
                     ptrs[t * VT_TAPS_V + v] = base[o + t] + line * stride[o + t];
                 }
             ptrs[VT_TAPS_T * VT_TAPS_V] = ptrs[VT_TAPS_T * VT_TAPS_V - 1];
-            f->vt_filter_line(dstp + r * dst_stride, ptrs, width, f->peak);
+            f->vt_filter_line(dstp + r * dst_stride, ptrs, width, f->peak,
+                              sited ? chroma_coefs[r & 1] : center);
         }
     }
 
     VSMap *props = vsapi->getFramePropertiesRW(dst);
     vsapi->mapSetInt(props, "_FieldBased", f->tff ? VSC_FIELD_TOP : VSC_FIELD_BOTTOM, maReplace);
+    if (f->chroma_sited) /* corrected to interlaced siting; horizontal is kept */
+        vsapi->mapSetInt(props, "_ChromaLocation",
+                         (cloc & 1) ? VSC_CHROMA_CENTER : VSC_CHROMA_LEFT, maReplace);
 
-    int err;
     int64_t dur_num = vsapi->mapGetInt(props, "_DurationNum", 0, &err);
     int64_t dur_den = err ? 0 : vsapi->mapGetInt(props, "_DurationDen", 0, &err);
     if (!err && dur_den > 0) {
@@ -186,13 +220,15 @@ static void VS_CC p2i_create(const VSMap *in, VSMap *out, void *user_data, VSCor
     if (d.vi.numFrames < 2)
         RETERROR("clip too short");
     if (d.filter) {
-        int kind;
+        if (d.vi.format.subSamplingH > 1)
+            RETERROR("vertical chroma subsampling greater than 2x is not supported");
         if (d.vi.format.sampleType == stInteger)
-            kind = d.vi.format.bytesPerSample == 1 ? P2I_KIND_U8 : P2I_KIND_U16;
+            d.kind = d.vi.format.bytesPerSample == 1 ? P2I_KIND_U8 : P2I_KIND_U16;
         else
-            kind = d.vi.format.bytesPerSample == 4 ? P2I_KIND_F32 : P2I_KIND_F16;
-        d.vt_filter_line = p2i_get_vt_filter_fn(kind, cpu);
+            d.kind = d.vi.format.bytesPerSample == 4 ? P2I_KIND_F32 : P2I_KIND_F16;
+        d.vt_filter_line = p2i_get_vt_filter_fn(d.kind, cpu);
         d.peak = d.vi.format.sampleType == stInteger ? (1 << d.vi.format.bitsPerSample) - 1 : 0;
+        d.chroma_sited = d.vi.format.subSamplingH > 0;
     }
 
     d.in_frames = d.vi.numFrames;

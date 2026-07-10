@@ -26,16 +26,20 @@ def table(name, conv):
 CI = table('VT_COEFS_I16', int)        # [5][19]
 CF = table('VT_COEFS_F32', float)
 assert CI.shape == CF.shape == (5, 19) and CI.sum() == 1 << BITS
+# fractional-delay variants for interlaced chroma siting
+CI_S = {s: table(f'VT_COEFS_{s}_I16', int) for s in ('M375', 'M125', 'P125', 'P375')}
+CF_S = {s: table(f'VT_COEFS_{s}_F32', float) for s in ('M375', 'M125', 'P125', 'P375')}
 
 
-def ref(frames, tff, integer, peak):
+def ref(frames, tff, integer, peak, ctab=None):
+    # ctab: (top, bottom) coefficient tables by output row parity
     n_out = len(frames) // 2
     h, w = frames[0].shape
-    coefs = CI if integer else CF
     out = []
     for n in range(n_out):
         dst = np.empty((h, w), np.int64 if integer else np.float64)
         for r in range(h):
+            coefs = ctab[r % 2] if ctab else (CI if integer else CF)
             o = (0 if tff else 1) if r % 2 == 0 else (1 if tff else 0)
             acc = np.zeros(w, dst.dtype)
             for t in range(5):
@@ -70,7 +74,9 @@ for fmt, dtype, peak in [(vs.GRAY8, np.uint8, 255), (vs.GRAY16, np.uint16, 65535
         for n in range(4):
             got = planes(out, n)
             for p in range(nplanes):
-                want = ref([fr[p] for fr in frames], tff, True, peak)[n]
+                # 420 chroma is moved onto the interlaced siting grid
+                ctab = (CI_S['M125'], CI_S['P125']) if p and fmt == vs.YUV420P10 else None
+                want = ref([fr[p] for fr in frames], tff, True, peak, ctab)[n]
                 assert np.array_equal(got[p], want), (fmt, tff, n, p)
     print(f'{src.format.name}: bit-exact vs reference (both field orders)')
 
@@ -101,6 +107,29 @@ for n in range(4):
     got = planes(hout, n)[0].astype(np.float64)
     assert np.allclose(got, want, rtol=0, atol=2e-3), n
 print('GrayH matches reference within f16 precision')
+
+# chroma siting: a ramp whose values equal their vertical position reads out
+# each sample's position after resampling. Progressive 4:2:0 chroma row c sits
+# at luma line 2c+voff; interlaced siting puts top-field chroma at 4j+0.25 and
+# bottom-field at 4j+2.75.
+H2 = 96
+for cl, voff in ((0, 0.5), (1, 0.5), (2, 0.0), (4, 1.0)):
+    uram = np.tile((2 * np.arange(H2 // 2) + voff)[:, None] * 256, (1, 8)).astype(np.uint16)
+    yram = np.full((H2, 16), 512, np.uint16)
+    ssrc = core.std.BlankClip(format=vs.YUV420P16, width=16, height=H2, length=8,
+                              fpsnum=50, fpsden=1)
+    ssrc = core.std.ModifyFrame(ssrc, ssrc, lambda n, f: (
+        lambda fo: ([np.copyto(np.asarray(fo[0]), yram),
+                     np.copyto(np.asarray(fo[1]), uram),
+                     np.copyto(np.asarray(fo[2]), uram)], fo)[1])(f.copy()))
+    ssrc = core.std.SetFrameProps(ssrc, _ChromaLocation=cl)
+    ofr = core.interlace.Interlace(ssrc).get_frame(1)
+    u = np.asarray(ofr[1]).astype(np.float64) / 256
+    for j in range(6, H2 // 4 - 6):
+        assert abs(u[2 * j, 4] - (4 * j + 0.25)) < 0.02, (cl, 'top', j, u[2 * j, 4])
+        assert abs(u[2 * j + 1, 4] - (4 * j + 2.75)) < 0.02, (cl, 'bot', j, u[2 * j + 1, 4])
+    assert ofr.props['_ChromaLocation'] == (1 if cl == 1 else 0)
+print('interlaced chroma siting exact for left/center/topleft/bottomleft input')
 
 # cpu levels: integer output identical everywhere; float within FMA tolerance
 frames = [[rng.integers(0, 1024, (12, 24), dtype=np.uint16)] for _ in range(9)]

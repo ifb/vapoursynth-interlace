@@ -30,7 +30,7 @@ static void setup_ptrs(const void *ptrs[VT_SRC_PTRS], int run, int elem)
 static void test_u8(void)
 {
     const void *ptrs[VT_SRC_PTRS];
-    checkasm_declare(void, void *, const void *const *, int, int);
+    checkasm_declare(void, void *, const void *const *, int, int, const void *);
     if (checkasm_check_func(p2i_get_vt_filter_fn(P2I_KIND_U8, checkasm_get_cpu_flags()),
                             "vt_filter_line_u8")) {
         INITIALIZE_BUF(src_buf);
@@ -38,12 +38,13 @@ static void test_u8(void)
             setup_ptrs(ptrs, i, 1);
             memset(dst_c, 0xaa, sizeof(dst_c));
             memset(dst_a, 0x55, sizeof(dst_a));
-            checkasm_call_ref(dst_c, ptrs, widths[i], 255);
-            checkasm_call_new(dst_a, ptrs, widths[i], 255);
+            const void *coefs = p2i_vt_coefs(P2I_KIND_U8, i % 5);
+            checkasm_call_ref(dst_c, ptrs, widths[i], 255, coefs);
+            checkasm_call_new(dst_a, ptrs, widths[i], 255, coefs);
             checkasm_check1d(uint8_t, dst_c, dst_a, widths[i], "dst");
         }
         setup_ptrs(ptrs, 0, 1);
-        checkasm_bench_new(dst_a, ptrs, 1920, 255);
+        checkasm_bench_new(dst_a, ptrs, 1920, 255, p2i_vt_coefs(P2I_KIND_U8, P2I_SHIFT_CENTER));
     }
     checkasm_report("u8");
 }
@@ -52,7 +53,7 @@ static void test_u16(void)
 {
     static const int peaks[] = { 1023, 4095, 65535 };
     const void *ptrs[VT_SRC_PTRS];
-    checkasm_declare(void, void *, const void *const *, int, int);
+    checkasm_declare(void, void *, const void *const *, int, int, const void *);
     if (checkasm_check_func(p2i_get_vt_filter_fn(P2I_KIND_U16, checkasm_get_cpu_flags()),
                             "vt_filter_line_u16")) {
         INITIALIZE_BUF(src_buf);
@@ -63,12 +64,13 @@ static void test_u16(void)
             memset(dst_c, 0xaa, sizeof(dst_c));
             memset(dst_a, 0x55, sizeof(dst_a));
             const int peak = peaks[i % 3];
-            checkasm_call_ref(dst_c, ptrs, widths[i], peak);
-            checkasm_call_new(dst_a, ptrs, widths[i], peak);
+            const void *coefs = p2i_vt_coefs(P2I_KIND_U16, i % 5);
+            checkasm_call_ref(dst_c, ptrs, widths[i], peak, coefs);
+            checkasm_call_new(dst_a, ptrs, widths[i], peak, coefs);
             checkasm_check1d(uint16_t, (uint16_t *)dst_c, (uint16_t *)dst_a, widths[i], "dst");
         }
         setup_ptrs(ptrs, 0, 2);
-        checkasm_bench_new(dst_a, ptrs, 1920, 65535);
+        checkasm_bench_new(dst_a, ptrs, 1920, 65535, p2i_vt_coefs(P2I_KIND_U16, P2I_SHIFT_CENTER));
     }
     checkasm_report("u16");
 }
@@ -76,7 +78,7 @@ static void test_u16(void)
 static void test_f32(void)
 {
     const void *ptrs[VT_SRC_PTRS];
-    checkasm_declare(void, void *, const void *const *, int, int);
+    checkasm_declare(void, void *, const void *const *, int, int, const void *);
     if (checkasm_check_func(p2i_get_vt_filter_fn(P2I_KIND_F32, checkasm_get_cpu_flags()),
                             "vt_filter_line_f32")) {
         INITIALIZE_BUF(src_buf);
@@ -88,8 +90,9 @@ static void test_f32(void)
             setup_ptrs(ptrs, i, 4);
             memset(dst_c, 0xaa, sizeof(dst_c));
             memset(dst_a, 0x55, sizeof(dst_a));
-            checkasm_call_ref(dst_c, ptrs, widths[i], 0);
-            checkasm_call_new(dst_a, ptrs, widths[i], 0);
+            const void *coefs = p2i_vt_coefs(P2I_KIND_F32, i % 5);
+            checkasm_call_ref(dst_c, ptrs, widths[i], 0, coefs);
+            checkasm_call_new(dst_a, ptrs, widths[i], 0, coefs);
             /* AVX2 up accumulates with FMA: one rounding fewer per tap than
                the C sum, so compare with a small ULP budget */
             const float *fc = (const float *)dst_c, *fa = (const float *)dst_a;
@@ -100,7 +103,7 @@ static void test_f32(void)
                 }
         }
         setup_ptrs(ptrs, 0, 4);
-        checkasm_bench_new(dst_a, ptrs, 1920, 0);
+        checkasm_bench_new(dst_a, ptrs, 1920, 0, p2i_vt_coefs(P2I_KIND_F32, P2I_SHIFT_CENTER));
     }
     checkasm_report("f32");
 }
@@ -135,7 +138,7 @@ static void check_f16(const uint16_t *hc, const uint16_t *ha, int w, float eps)
 static void test_f16(void)
 {
     const void *ptrs[VT_SRC_PTRS];
-    checkasm_declare(void, void *, const void *const *, int, int);
+    checkasm_declare(void, void *, const void *const *, int, int, const void *);
     if (checkasm_check_func(p2i_get_vt_filter_fn(P2I_KIND_F16, checkasm_get_cpu_flags()),
                             "vt_filter_line_f16")) {
         uint16_t *h = (uint16_t *)src_buf;
@@ -151,14 +154,15 @@ static void test_f16(void)
                 setup_ptrs(ptrs, i, 2);
                 memset(dst_c, 0xaa, sizeof(dst_c));
                 memset(dst_a, 0x55, sizeof(dst_a));
-                checkasm_call_ref(dst_c, ptrs, widths[i], 0);
-                checkasm_call_new(dst_a, ptrs, widths[i], 0);
+                const void *coefs = p2i_vt_coefs(P2I_KIND_F16, i % 5);
+                checkasm_call_ref(dst_c, ptrs, widths[i], 0, coefs);
+                checkasm_call_new(dst_a, ptrs, widths[i], 0, coefs);
                 check_f16((const uint16_t *)dst_c, (const uint16_t *)dst_a,
                           widths[i], phase ? 3e-5f : 2.0f);
             }
         }
         setup_ptrs(ptrs, 0, 2);
-        checkasm_bench_new(dst_a, ptrs, 1920, 0);
+        checkasm_bench_new(dst_a, ptrs, 1920, 0, p2i_vt_coefs(P2I_KIND_F16, P2I_SHIFT_CENTER));
     }
     checkasm_report("f16");
 }
