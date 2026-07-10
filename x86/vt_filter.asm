@@ -219,3 +219,45 @@ INIT_YMM avx2
 VT_F32
 INIT_ZMM avx512
 VT_F32
+
+; void vt_filter_line_f16(void *dst, const void *const *src, int width, int peak)
+; F16C convert on load, f32 FMA accumulation in scalar tap order,
+; round-to-nearest-even store. AVX2 up only; the C fallback covers the rest.
+%macro VT_F16 0
+cglobal vt_filter_line_f16, 3, 8, 3, dst, src, w, x, k, ptra, coef, rem
+    lea       coefq, [vt_coefs_f32]
+    TAIL_MASK kxnorw, kmovw, ptraq, ptrad, LOG2M - 2
+    add          wd, mmsize/4 - 1
+    shr          wd, LOG2M - 2
+    xor          xq, xq
+.xloop:
+    xorps        m0, m0
+    xor          kq, kq
+.kloop:
+    mov       ptraq, [srcq + kq*8]
+    vbroadcastss m1, [coefq + kq*4]
+    vcvtph2ps    m2, [ptraq + xq]
+    vfmadd231ps  m0, m1, m2
+    add          kq, 1
+    cmp          kq, 95
+    jl .kloop
+%if mmsize == 64
+    kxnorw       k1, k1, k1
+    cmp          wd, 1
+    jne %%whole
+    kmovw        k1, k2
+%%whole:
+    vcvtps2ph [dstq + xq]{k1}, m0, 4
+%else
+    vcvtps2ph [dstq + xq], m0, 4
+%endif
+    add          xq, mmsize/2
+    dec          wd
+    jg .xloop
+    RET
+%endmacro
+
+INIT_YMM avx2
+VT_F16
+INIT_ZMM avx512
+VT_F16

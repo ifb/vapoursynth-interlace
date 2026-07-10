@@ -5,6 +5,7 @@ enum {
     P2I_KIND_U8,
     P2I_KIND_U16,
     P2I_KIND_F32,
+    P2I_KIND_F16,
 };
 
 /* src: VT_TAPS_T * VT_TAPS_V line pointers, [t][v] flattened, edges

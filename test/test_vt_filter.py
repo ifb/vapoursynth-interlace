@@ -90,12 +90,17 @@ fr = core.interlace.Interlace(src).get_frame(1)
 assert {fr[0][r, c] for r in range(12) for c in range(24)} == {137}
 print('DC preservation exact')
 
-try:
-    core.interlace.Interlace(core.std.BlankClip(format=vs.GRAYH, width=16, height=4, length=4))
-    sys.exit('accepted half float')
-except vs.Error as e:
-    assert 'sample type' in str(e)
-print('half float rejected')
+# half float: valid output within f16 precision of a float64 reference
+hfr = [[rng.random((12, 24)).astype(np.float16)] for _ in range(9)]
+hsrc = core.std.BlankClip(format=vs.GRAYH, width=24, height=12, length=9, fpsnum=50, fpsden=1)
+hsrc = core.std.ModifyFrame(hsrc, hsrc, lambda n, f: (
+    lambda fo: (np.copyto(np.asarray(fo[0]), hfr[n][0]), fo)[1])(f.copy()))
+hout = core.interlace.Interlace(hsrc)
+for n in range(4):
+    want = ref([fr[0].astype(np.float64) for fr in hfr], True, False, None)[n]
+    got = planes(hout, n)[0].astype(np.float64)
+    assert np.allclose(got, want, rtol=0, atol=2e-3), n
+print('GrayH matches reference within f16 precision')
 
 # cpu levels: integer output identical everywhere; float within FMA tolerance
 frames = [[rng.integers(0, 1024, (12, 24), dtype=np.uint16)] for _ in range(9)]

@@ -189,10 +189,8 @@ static void VS_CC p2i_create(const VSMap *in, VSMap *out, void *user_data, VSCor
         int kind;
         if (d.vi.format.sampleType == stInteger)
             kind = d.vi.format.bytesPerSample == 1 ? P2I_KIND_U8 : P2I_KIND_U16;
-        else if (d.vi.format.bytesPerSample == 4)
-            kind = P2I_KIND_F32;
         else
-            RETERROR("unsupported sample type (use 8-16 bit integer or 32-bit float)");
+            kind = d.vi.format.bytesPerSample == 4 ? P2I_KIND_F32 : P2I_KIND_F16;
         d.vt_filter_line = p2i_get_vt_filter_fn(kind, cpu);
         d.peak = d.vi.format.sampleType == stInteger ? (1 << d.vi.format.bitsPerSample) - 1 : 0;
     }

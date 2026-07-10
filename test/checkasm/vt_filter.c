@@ -1,3 +1,4 @@
+#include <math.h>
 #include <stdint.h>
 #include <string.h>
 
@@ -104,9 +105,68 @@ static void test_f32(void)
     checkasm_report("f32");
 }
 
+/* test-local copy of the kernel's soft conversion */
+static float f16_value(uint16_t h)
+{
+    int e = (h >> 10) & 0x1f;
+    float m = (float)((h & 0x3ff) | (e ? 0x400 : 0));
+    float v = ldexpf(m, (e ? e : 1) - 25);
+    return h & 0x8000 ? -v : v;
+}
+
+/* FMA accumulation vs the unfused C sum differs by up to one f32 rounding
+   per tap of the running sum, which cancellation can magnify well past the
+   final value's f16 ulp; accept one f16 step or a difference within the
+   worst-case fused/unfused bound for the input range */
+static void check_f16(const uint16_t *hc, const uint16_t *ha, int w, float eps)
+{
+    for (int j = 0; j < w; j++) {
+        int ka = ha[j] & 0x8000 ? -(ha[j] & 0x7fff) : ha[j];
+        int kc = hc[j] & 0x8000 ? -(hc[j] & 0x7fff) : hc[j];
+        int dk = ka - kc;
+        float dv = f16_value(ha[j]) - f16_value(hc[j]);
+        if ((dk > 1 || dk < -1) && (dv > eps || dv < -eps)) {
+            checkasm_fail_func("dst[%d]: 0x%04x vs 0x%04x", j, hc[j], ha[j]);
+            return;
+        }
+    }
+}
+
+static void test_f16(void)
+{
+    const void *ptrs[VT_SRC_PTRS];
+    checkasm_declare(void, void *, const void *const *, int, int);
+    if (checkasm_check_func(p2i_get_vt_filter_fn(P2I_KIND_F16, checkasm_get_cpu_flags()),
+                            "vt_filter_line_f16")) {
+        uint16_t *h = (uint16_t *)src_buf;
+        for (int phase = 0; phase < 2; phase++) {
+            INITIALIZE_BUF(src_buf);
+            for (size_t i = 0; i < sizeof(src_buf) / 2; i++) {
+                if (phase) /* +/-[0.5,1): tight fused/unfused bound */
+                    h[i] = (h[i] & 0x83ff) | 0x3800;
+                else if ((h[i] & 0x7c00) == 0x7c00) /* finite full range */
+                    h[i] ^= 0x0400;
+            }
+            for (int i = 0; i < NWIDTHS; i++) {
+                setup_ptrs(ptrs, i, 2);
+                memset(dst_c, 0xaa, sizeof(dst_c));
+                memset(dst_a, 0x55, sizeof(dst_a));
+                checkasm_call_ref(dst_c, ptrs, widths[i], 0);
+                checkasm_call_new(dst_a, ptrs, widths[i], 0);
+                check_f16((const uint16_t *)dst_c, (const uint16_t *)dst_a,
+                          widths[i], phase ? 3e-5f : 2.0f);
+            }
+        }
+        setup_ptrs(ptrs, 0, 2);
+        checkasm_bench_new(dst_a, ptrs, 1920, 0);
+    }
+    checkasm_report("f16");
+}
+
 void checkasm_test_vt_filter(void)
 {
     test_u8();
     test_u16();
     test_f32();
+    test_f16();
 }
