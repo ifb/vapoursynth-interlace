@@ -97,9 +97,44 @@ c = core.std.AddBorders(c, left=6, right=6, color=[64, 512, 512])
 out = core.interlace.Interlace(c)
 ```
 
-Things to avoid: scaling or format conversion after `Interlace` (it would
-filter across fields); interlacing before tonemapping; feeding 59.94/50 fps
-mixups — the filter halves whatever rate it is given.
+## Choosing a downscaler for 2160p→1080i
+
+EBU TECH 3384 ships a companion 2160p test pattern for exactly this chain.
+As shipped, its gratings sit at the same absolute frequencies as the 1080p
+pattern (13.5–80.8% of 1080p Nyquist after the 2:1 downscale) and its zone
+plate tops out at 1080p Nyquist — worst-case oversampled 1080p content. The
+pattern therefore measures how faithfully a 2160p→1080i chain reproduces
+the native 1080i response. It contains nothing above 1080p Nyquist, so it
+does not rank alias suppression.
+
+Every zimg kernel, measured through `resize` + `Interlace` against the
+official file: horizontal grating MTF (the interlacer leaves horizontal
+untouched, so this is the resizer alone), worst deviation of the composed
+vertical gratings from the native-1080p chain over gratings 1–4 (the
+pass/knee region of the interlacing filter), and white-cross ringing
+(native chain: −11.8%).
+
+| kernel | g1 | g2 | g3 | g4 | g5 | g6 (dB) | V dev | ring |
+|---|---|---|---|---|---|---|---|---|
+| Bilinear | −0.15 | −0.59 | −1.32 | −2.42 | −3.81 | −5.67 | 2.42 dB | −2.8% |
+| Bicubic b=0 c=.5 | −0.00 | −0.06 | −0.25 | −0.76 | −1.63 | −3.12 | 0.76 | −5.4% |
+| Bicubic Mitchell | −0.09 | −0.38 | −0.89 | −1.78 | −3.02 | −4.86 | 1.78 | −3.7% |
+| Spline16 | +0.03 | +0.03 | −0.10 | −0.62 | −1.60 | −3.31 | 0.62 | −5.8% |
+| Spline36 | −0.00 | +0.00 | +0.04 | −0.12 | −0.71 | −2.24 | 0.12 | −5.8% |
+| Spline64 | +0.00 | −0.02 | −0.04 | −0.17 | −0.57 | −1.91 | 0.17 | −5.6% |
+| Lanczos3 | +0.00 | +0.04 | +0.13 | +0.04 | −0.43 | −1.83 | 0.13 | −6.1% |
+| Lanczos4 | −0.00 | −0.04 | −0.02 | +0.05 | −0.00 | −1.10 | 0.05 | −5.8% |
+
+Gratings 1–6 are 13.5/26.9/40.4/53.9/67.3/80.8% of 1080p Nyquist. Spline36,
+Spline64, Lanczos3 and Lanczos4 are one quality class: within 0.2 dB of the
+native chain where it matters, identical ringing. Lanczos4 retains the most
+detail near Nyquist; Bilinear, Mitchell and Spline16 measurably dull the
+chain. Composed ringing is lower than native because the down-conversion
+band-limits the edges. The examples above use Spline36; Lanczos4 is equally
+defensible when maximum detail retention is wanted (this material cannot
+penalize its weaker alias suppression, so judge that separately). The full
+composed chain's vertical-temporal cutoff tracks the WHP 315 template
+within 0.021 normalized frequency over the entire temporal range.
 
 ## Building
 
