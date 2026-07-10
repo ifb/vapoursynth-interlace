@@ -1,4 +1,4 @@
-/* Instantiated per pixel type: pixel, acc_t, FUNC, VT_INT defined by includer. */
+/* Instantiated per pixel type: pixel, acc_t, FUNC, COEFS, VT_INT defined by includer. */
 
 static void FUNC(vt_filter_line)(void *dstv, const void *const *srcv, int width, int peak)
 {
@@ -7,14 +7,12 @@ static void FUNC(vt_filter_line)(void *dstv, const void *const *srcv, int width,
 
     for (int x = 0; x < width; x++) {
         acc_t sum = 0;
-        for (int t = 0; t < VT_TAPS_T; t++)
-            for (int v = 0; v < VT_TAPS_V; v++)
+        for (int i = 0; i < VT_TAPS_T * VT_TAPS_V; i++)
+            sum += COEFS[i] * (acc_t)src[i][x];
 #if VT_INT
-                sum += vt_coefs_i16[t][v] * (acc_t)src[t * VT_TAPS_V + v][x];
         sum = (sum + (1 << (VT_COEF_BITS - 1))) >> VT_COEF_BITS;
         dst[x] = sum < 0 ? 0 : sum > peak ? peak : sum;
 #else
-                sum += vt_coefs_f32[t][v] * src[t * VT_TAPS_V + v][x];
         (void)peak;
         dst[x] = sum;
 #endif

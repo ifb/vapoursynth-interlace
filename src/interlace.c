@@ -8,6 +8,7 @@
 #include <VSConstants4.h>
 #include <VSHelper4.h>
 
+#include "cpu.h"
 #include "vt_coeffs.h"
 #include "vt_filter.h"
 
@@ -96,12 +97,13 @@ static const VSFrame *VS_CC p2i_get_frame(int n, int activation_reason, void *in
         int top_off = f->tff ? 0 : 1;
         for (int r = 0; r < rows; r++) {
             int o = (r & 1) ? !top_off : top_off;
-            const void *ptrs[VT_TAPS_T * VT_TAPS_V];
+            const void *ptrs[VT_SRC_PTRS];
             for (int t = 0; t < VT_TAPS_T; t++)
                 for (int v = 0; v < VT_TAPS_V; v++) {
                     int line = VSMIN(VSMAX(r + v - VT_TAPS_V / 2, 0), rows - 1);
                     ptrs[t * VT_TAPS_V + v] = base[o + t] + line * stride[o + t];
                 }
+            ptrs[VT_TAPS_T * VT_TAPS_V] = ptrs[VT_TAPS_T * VT_TAPS_V - 1];
             f->vt_filter_line(dstp + r * dst_stride, ptrs, width, f->peak);
         }
     }
@@ -164,9 +166,14 @@ static void VS_CC p2i_create(const VSMap *in, VSMap *out, void *user_data, VSCor
     if (d.vi.numFrames < 2)
         RETERROR("clip too short");
     if (d.filter) {
-        d.vt_filter_line = p2i_get_vt_filter_fn(&d.vi.format);
-        if (!d.vt_filter_line)
+        int kind;
+        if (d.vi.format.sampleType == stInteger)
+            kind = d.vi.format.bytesPerSample == 1 ? P2I_KIND_U8 : P2I_KIND_U16;
+        else if (d.vi.format.bytesPerSample == 4)
+            kind = P2I_KIND_F32;
+        else
             RETERROR("unsupported sample type (use 8-16 bit integer or 32-bit float)");
+        d.vt_filter_line = p2i_get_vt_filter_fn(kind, p2i_cpu_detect());
         d.peak = d.vi.format.sampleType == stInteger ? (1 << d.vi.format.bitsPerSample) - 1 : 0;
     }
 

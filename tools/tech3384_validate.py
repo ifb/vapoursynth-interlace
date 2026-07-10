@@ -39,8 +39,8 @@ core.std.LoadPlugin(args[0])
 GRATING_PCT = [13.5, 26.9, 40.4, 53.9, 67.3, 80.8]
 
 _hdr = (pathlib.Path(__file__).parent / '../src/vt_coeffs.h').read_text()
-_rows = re.findall(r'\{\s*([^{}]+?)\s*\}', _hdr.split('vt_coefs_f32')[1].split(';')[0])
-CF = np.array([[float(x.strip().rstrip('f')) for x in r.split(',')] for r in _rows])
+_body = _hdr.split('#define VT_COEFS_F32')[1].split('\n\n')[0].replace('\\\n', ' ')
+CF = np.array([float(x.strip().rstrip('f')) for x in _body.split(',') if x.strip()]).reshape(5, 19)
 
 
 def resp(v, t):

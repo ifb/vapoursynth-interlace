@@ -18,12 +18,13 @@ BITS = int(re.search(r'VT_COEF_BITS (\d+)', hdr).group(1))
 
 
 def table(name, conv):
-    rows = re.findall(r'\{\s*([^{}]+?)\s*\}', hdr.split(name)[1].split(';')[0])
-    return np.array([[conv(x.strip().rstrip('f')) for x in r.split(',')] for r in rows])
+    body = hdr.split('#define ' + name)[1].split('\n\n')[0].replace('\\\n', ' ')
+    vals = [conv(x.strip().rstrip('f')) for x in body.split(',') if x.strip()]
+    return np.array(vals[:95]).reshape(5, 19)
 
 
-CI = table('vt_coefs_i16', int)        # [5][19]
-CF = table('vt_coefs_f32', float)
+CI = table('VT_COEFS_I16', int)        # [5][19]
+CF = table('VT_COEFS_F32', float)
 assert CI.shape == CF.shape == (5, 19) and CI.sum() == 1 << BITS
 
 
