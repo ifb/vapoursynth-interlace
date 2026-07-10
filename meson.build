@@ -3,7 +3,7 @@ project('interlace', 'c',
     license: 'GPL-2.0-or-later',
     license_files: 'LICENSE',
     meson_version: '>=1.2.3',
-    version: '0',
+    version: '1',
 )
 
 py = import('python').find_installation(pure: false)
@@ -39,7 +39,7 @@ shared_module('interlace',
     name_prefix: '',
 )
 
-checkasm_dep = dependency('checkasm', required: false, allow_fallback: true)
+checkasm_dep = dependency('checkasm', required: get_option('checkasm'), allow_fallback: true)
 if checkasm_dep.found()
     checkasm_exe = executable('checkasm',
         files('test/checkasm/main.c', 'test/checkasm/vt_filter.c'),
