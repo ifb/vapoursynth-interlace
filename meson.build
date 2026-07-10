@@ -39,3 +39,13 @@ shared_module('interlace',
     name_prefix: '',
 )
 
+checkasm_dep = dependency('checkasm', required: false, allow_fallback: true)
+if checkasm_dep.found()
+    checkasm_exe = executable('checkasm',
+        files('test/checkasm/main.c', 'test/checkasm/vt_filter.c'),
+        dependencies: checkasm_dep,
+        include_directories: include_directories('src'),
+        link_with: core,
+    )
+    test('checkasm', checkasm_exe)
+endif
