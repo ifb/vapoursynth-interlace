@@ -26,12 +26,16 @@ is set and frame durations doubled.
 - `tff` — field order of the output; the temporally first frame supplies the
   top field when true (default).
 - `filter` — apply the WHP 315 vertical-temporal prefilter (default). With
-  `filter=False` fields are woven with no filtering, which aliases; this is
-  only useful as a worst-case reference.
+  `filter=False` fields are woven with no filtering, which aliases. Only
+  useful as a worst-case reference.
+- `cpu` — cap the instruction set used, for testing and debugging:
+  `"none"` (plain C), `"sse2"`, `"avx2"` or `"avx512"`. Default: everything
+  the host supports. Levels the hardware lacks are simply not used.
 
 Same filter on all planes (per WHP 230); zero phase, so no chroma/luma
 timing shift. SSE2/AVX2/AVX-512 kernels are selected at runtime and produce
 bit-identical output to the C implementation, floats included.
+
 
 ## Building
 

@@ -97,4 +97,27 @@ except vs.Error as e:
     assert 'sample type' in str(e)
 print('half float rejected')
 
+# cpu levels: integer output identical everywhere; float within FMA tolerance
+frames = [[rng.integers(0, 1024, (12, 24), dtype=np.uint16)] for _ in range(9)]
+src = core.std.BlankClip(format=vs.GRAY10, width=24, height=12, length=9, fpsnum=50, fpsden=1)
+src = core.std.ModifyFrame(src, src, lambda n, f: (
+    lambda fo: (np.copyto(np.asarray(fo[0]), frames[n][0]), fo)[1])(f.copy()))
+fsrc = core.std.BlankClip(format=vs.GRAYS, width=24, height=12, length=9, fpsnum=50, fpsden=1)
+ffr = [[rng.random((12, 24), np.float32)] for _ in range(9)]
+fsrc = core.std.ModifyFrame(fsrc, fsrc, lambda n, f: (
+    lambda fo: (np.copyto(np.asarray(fo[0]), ffr[n][0]), fo)[1])(f.copy()))
+ref_i = planes(core.interlace.Interlace(src, cpu='none'), 1)[0]
+ref_f = planes(core.interlace.Interlace(fsrc, cpu='none'), 1)[0]
+for level in ('sse2', 'avx2', 'avx512'):
+    got = planes(core.interlace.Interlace(src, cpu=level), 1)[0]
+    assert np.array_equal(got, ref_i), level
+    gotf = planes(core.interlace.Interlace(fsrc, cpu=level), 1)[0]
+    assert np.allclose(gotf, ref_f, rtol=0, atol=1e-5), level
+try:
+    core.interlace.Interlace(src, cpu='mmx')
+    sys.exit('accepted bad cpu')
+except vs.Error as e:
+    assert 'cpu' in str(e)
+print('cpu levels consistent (none/sse2/avx2/avx512)')
+
 print('all VT filter tests pass')

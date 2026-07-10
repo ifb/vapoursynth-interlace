@@ -3,6 +3,7 @@
  */
 
 #include <stdlib.h>
+#include <string.h>
 
 #include <VapourSynth4.h>
 #include <VSConstants4.h>
@@ -159,6 +160,25 @@ static void VS_CC p2i_create(const VSMap *in, VSMap *out, void *user_data, VSCor
         d.filter = 1;
     d.filter = !!d.filter;
 
+    unsigned cpu = p2i_cpu_detect();
+    const char *cpu_req = vsapi->mapGetData(in, "cpu", 0, &err);
+    if (!err) {
+        static const struct { const char *name; unsigned mask; } levels[] = {
+            { "none",   0 },
+            { "sse2",   P2I_CPU_SSE2 },
+            { "avx2",   P2I_CPU_SSE2 | P2I_CPU_AVX2 },
+            { "avx512", P2I_CPU_SSE2 | P2I_CPU_AVX2 | P2I_CPU_AVX512 },
+        };
+        int i;
+        for (i = 0; i < 4; i++)
+            if (!strcmp(cpu_req, levels[i].name)) {
+                cpu &= levels[i].mask;
+                break;
+            }
+        if (i == 4)
+            RETERROR("cpu must be one of none/sse2/avx2/avx512");
+    }
+
     if (!vsh_isConstantVideoFormat(&d.vi))
         RETERROR("clip must have constant format and dimensions");
     if ((d.vi.height >> d.vi.format.subSamplingH) & 1)
@@ -173,7 +193,7 @@ static void VS_CC p2i_create(const VSMap *in, VSMap *out, void *user_data, VSCor
             kind = P2I_KIND_F32;
         else
             RETERROR("unsupported sample type (use 8-16 bit integer or 32-bit float)");
-        d.vt_filter_line = p2i_get_vt_filter_fn(kind, p2i_cpu_detect());
+        d.vt_filter_line = p2i_get_vt_filter_fn(kind, cpu);
         d.peak = d.vi.format.sampleType == stInteger ? (1 << d.vi.format.bitsPerSample) - 1 : 0;
     }
 
@@ -197,7 +217,8 @@ VS_EXTERNAL_API(void) VapourSynthPluginInit2(VSPlugin *plugin, const VSPLUGINAPI
     vspapi->registerFunction("Interlace",
                              "clip:vnode;"
                              "tff:int:opt;"
-                             "filter:int:opt;",
+                             "filter:int:opt;"
+                             "cpu:data:opt;",
                              "clip:vnode;",
                              p2i_create, NULL, plugin);
 }
