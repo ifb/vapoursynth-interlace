@@ -7,7 +7,7 @@ White Paper WHP 315 (K.C. Noland, "Optimal Interlacing using Human Sensitivity
 Measurements", 2016): a 19-line by 5-frame linear vertical-temporal low-pass
 applied to the progressive sequence before discarding alternate lines, with a
 pass-band shaped by the measured human sensitivity to interlacing aliases
-(WHP 230). Output behaviour has been validated against the EBU TECH 3384
+(WHP 230). Output behavior has been validated against the EBU TECH 3384
 test patterns and measurement methodology.
 
 ## Usage
@@ -41,25 +41,65 @@ on AVX2 and above, so float output can differ from C by a few ulp
 (~1e-6 relative). The fused sum skips one rounding per tap and is the more
 accurate of the two.
 
-## 4:2:0 workflows
+## 4:2:0 and chroma siting
 
-Each plane is filtered on its own sampling lattice and chroma rows are woven
-by field parity, consistent with `SeparateFields`/`DoubleWeave`. Two things
-to know for 1080p→1080i in 4:2:0:
+Progressive 4:2:0 sites chroma relative to luma per `_ChromaLocation`.
+Interlaced 4:2:0 sites each field's chroma at the ¼/¾ positions between the
+field's luma lines. The filter honors the input `_ChromaLocation`
+(left/center/topleft/top/bottomleft/bottom; assumed left when absent) and
+**resamples vertically subsampled chroma onto the interlaced siting grid**
+inside the same vertical-temporal convolution - fractionally delayed
+variants of the same kernel, at no extra cost.
 
-- **Chroma siting.** Progressive 4:2:0 sites chroma between luma line pairs;
-  interlaced 4:2:0 sites each field's chroma at ¼/¾ positions. This filter
-  does not resample chroma to interlaced siting (that is a `resize` job), so
-  staying 4:2:0 end to end carries a half-luma-line chroma siting offset
-  versus strict interlaced-4:2:0 convention. Many real chains carry exactly
-  this; if you need it strictly correct, work in 4:2:2 through the
-  interlace step (`resize` up, `Interlace`, then let the interlaced-aware
-  encoder subsample) — production interlaced video is 4:2:2 anyway.
-- **Chroma bandwidth.** Subsampled chroma gets the same filter at its own
-  lattice, i.e. the cutoff sits at the same fraction of the (halved) chroma
-  Nyquist. The WHP 315 / TECH 3384 references only cover 4:2:2; per-plane
-  application is the natural reading of WHP 230's "same filter on all
-  components".
+Chroma bandwidth note: subsampled chroma gets the same filter at its own
+lattice (the cutoff sits at the same fraction of the halved chroma Nyquist).
+The WHP 315 / TECH 3384 references only cover 4:2:2; per-plane application
+is the natural reading of WHP 230's "same filter on all components".
+
+## Recommended workflows
+
+Do all spatial scaling, color conversion and tonemapping progressive;
+interlace **last**. Never resize after interlacing.
+
+```python
+# 1080p50 -> 1080i25, staying 4:2:0
+out = core.interlace.Interlace(clip)      # chroma siting handled
+# encode with an interlaced-aware encoder (e.g. x264 --tff)
+
+# 1080p50 4:2:0 -> 1080i25 4:2:2 (production/contribution)
+c = core.resize.Point(clip, format=vs.YUV422P10)
+out = core.interlace.Interlace(c)
+
+# UHD 2160p50 -> 1080i25 (down-convert then interlace)
+c = core.resize.Spline36(clip, 1920, 1080, format=vs.YUV422P10)
+out = core.interlace.Interlace(c)
+
+# HDR UHD -> SDR 1080i: tonemap/convert color first, progressive
+c = your_hdr_to_sdr(clip)                 # e.g. resize/placebo chain
+c = core.resize.Spline36(c, 1920, 1080, format=vs.YUV422P10)
+out = core.interlace.Interlace(c)
+
+# 1080p50 -> 576i25 (PAL SD, 16:9 anamorphic). The BT.601 line is 720
+# samples but the active picture is 702 (52us at 13.5MHz): scale the image
+# to 702 and pad to 720 with blanking, or the geometry is subtly wrong.
+# resize rescales a tagged _SARNum/_SARDen to keep display aspect (1:1 in
+# -> 512/351 here); tag the source first if it is untagged.
+c = core.std.SetFrameProps(clip, _SARNum=1, _SARDen=1)
+c = core.resize.Spline36(c, 702, 576, format=vs.YUV422P10)
+c = core.std.AddBorders(c, left=10, right=8, color=[64, 512, 512])
+out = core.interlace.Interlace(c)
+
+# 1080p59.94 -> 480i29.97 (NTSC SD, 16:9 anamorphic). SMPTE RP 187 puts the
+# 525-line active picture at 708 samples; resize yields SAR 640/531.
+c = core.std.SetFrameProps(clip, _SARNum=1, _SARDen=1)
+c = core.resize.Spline36(c, 708, 480, format=vs.YUV422P10)
+c = core.std.AddBorders(c, left=6, right=6, color=[64, 512, 512])
+out = core.interlace.Interlace(c)
+```
+
+Things to avoid: scaling or format conversion after `Interlace` (it would
+filter across fields); interlacing before tonemapping; feeding 59.94/50 fps
+mixups — the filter halves whatever rate it is given.
 
 ## Building
 
