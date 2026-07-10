@@ -66,33 +66,30 @@ interlace **last**. Never resize after interlacing.
 out = core.interlace.Interlace(clip)      # chroma siting handled
 # encode with an interlaced-aware encoder (e.g. x264 --tff)
 
-# 1080p50 4:2:0 -> 1080i25 4:2:2 (production/contribution)
-c = core.resize.Point(clip, format=vs.YUV422P10)
+# 1080p50 4:2:0 -> 1080i25 4:2:2
+c = core.resize.Bicubic(clip, format=vs.YUV422P10)
 out = core.interlace.Interlace(c)
 
 # UHD 2160p50 -> 1080i25 (down-convert then interlace)
-c = core.resize.Spline36(clip, 1920, 1080, format=vs.YUV422P10)
+c = core.resize.Lanczos(clip, 1920, 1080, format=vs.YUV422P10, filter_param_a=4)
 out = core.interlace.Interlace(c)
 
 # HDR UHD -> SDR 1080i: tonemap/convert color first, progressive
 c = your_hdr_to_sdr(clip)                 # e.g. resize/placebo chain
-c = core.resize.Spline36(c, 1920, 1080, format=vs.YUV422P10)
+c = core.resize.Lanczos(c, 1920, 1080, format=vs.YUV422P10, filter_param_a=4)
 out = core.interlace.Interlace(c)
 
-# 1080p50 -> 576i25 (PAL SD, 16:9 anamorphic). The BT.601 line is 720
-# samples but the active picture is 702 (52us at 13.5MHz): scale the image
-# to 702 and pad to 720 with blanking, or the geometry is subtly wrong.
-# resize rescales a tagged _SARNum/_SARDen to keep display aspect (1:1 in
-# -> 512/351 here); tag the source first if it is untagged.
-c = core.std.SetFrameProps(clip, _SARNum=1, _SARDen=1)
-c = core.resize.Spline36(c, 702, 576, format=vs.YUV422P10)
-c = core.std.AddBorders(c, left=10, right=8, color=[64, 512, 512])
+# 1080p50 -> 576i25 (PAL SD, 16:9 anamorphic). The active picture is
+# 702 wide (52us at 13.5MHz). Fudge the image to 704 (for mod 16 and even
+# chroma) instead or don't fudge and crop the width 5.5 first.
+c = core.resize.Lanczos(c, 704, 576, format=vs.YUV420P8, filter_param_a=4)
+c = core.std.AddBorders(c, left=8, right=8, color=[16, 128, 128])
 out = core.interlace.Interlace(c)
 
 # 1080p59.94 -> 480i29.97 (NTSC SD, 16:9 anamorphic). SMPTE RP 187 puts the
 # 525-line active picture at 708 samples; resize yields SAR 640/531.
 c = core.std.SetFrameProps(clip, _SARNum=1, _SARDen=1)
-c = core.resize.Spline36(c, 708, 480, format=vs.YUV422P10)
+c = core.resize.Lanczos(c, 708, 480, format=vs.YUV422P10, filter_param_a=4)
 c = core.std.AddBorders(c, left=6, right=6, color=[64, 512, 512])
 out = core.interlace.Interlace(c)
 ```
@@ -130,11 +127,42 @@ Spline64, Lanczos3 and Lanczos4 are one quality class: within 0.2 dB of the
 native chain where it matters, identical ringing. Lanczos4 retains the most
 detail near Nyquist; Bilinear, Mitchell and Spline16 measurably dull the
 chain. Composed ringing is lower than native because the down-conversion
-band-limits the edges. The examples above use Spline36; Lanczos4 is equally
-defensible when maximum detail retention is wanted (this material cannot
-penalize its weaker alias suppression, so judge that separately). The full
-composed chain's vertical-temporal cutoff tracks the WHP 315 template
-within 0.021 normalized frequency over the entire temporal range.
+band-limits the edges. The full composed chain's vertical-temporal cutoff
+tracks the WHP 315 template within 0.021 normalized frequency over the
+entire temporal range.
+
+### Alias suppression
+
+The official material carries nothing above 1080p Nyquist, so alias
+rejection is scored separately (`tools/resizer_alias.py`): synthetic 2160p
+gratings at 1.05–1.95× 1080p Nyquist, whose downscale residue lands at
+2−f. Horizontal is the resizer alone; vertically the interlacing filter's
+stop band absorbs whatever lands above its cutoff — aliases from
+1.05–1.35× Nyquist land at 0.95–0.65× and come out ≤ −37 dB **for every
+kernel**, so the vertical axis only discriminates at 1.5× and beyond.
+Response in dB relative to the source grating; −54 dB is the 10-bit
+measurement floor:
+
+| kernel | H 1.05 | H 1.2 | H 1.35 | H 1.5 | H 1.65–1.95 | V worst, after chain |
+|---|---|---|---|---|---|---|
+| Bilinear | −9.9 | −13.8 | −18.7 | −25.1 | −34…−54 | −25.4 (@1.5) |
+| Bicubic b=0 c=.5 | −7.2 | −11.3 | −16.6 | −23.7 | −33…−54 | −24.0 (@1.5) |
+| Mitchell | −9.5 | −13.9 | −19.4 | −26.6 | −36…−54 | −26.6 (@1.5) |
+| Spline16 | −8.2 | −13.3 | −20.0 | −29.0 | −41…−54 | −29.3 (@1.5) |
+| Spline36 | −7.9 | −14.7 | −24.7 | −41.2 | −54 | −41.1 (@1.5) |
+| Spline64 | −8.0 | −15.6 | −26.7 | −41.5 | −54 | −41.7 (@1.5) |
+| Lanczos3 | −7.5 | −14.9 | −28.5 | −39.5 | −44…−50 | −39.5 (@1.5) |
+| Lanczos4 | −8.2 | −19.6 | −44.9 | −47.1 | −45…−54 | −45.1 (@1.65) |
+
+At 1.05× every kernel sits at −7…−10 dB — the transition width is
+inherent, and the soft kernels buy their ~1.5 dB there with 4–6 dB of
+passband loss. Lanczos4 leads from 1.2× on both axes and has the best
+composed-vertical worst case; its only gap versus the splines is side-lobe
+leakage around 1.5–1.65× at ≈ −45 dB, below every alternative's worst
+case. Lanczos3's side lobes never reach the floor. Taken together with the
+scorecard above: **Lanczos4 is the measured pick for 2160p→1080i**, with
+Spline36/Spline64 as slightly softer, marginally cleaner-far-field
+alternatives.
 
 ## Building
 
