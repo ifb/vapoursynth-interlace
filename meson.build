@@ -24,7 +24,11 @@ if host_machine.cpu_family() == 'x86_64'
     core_sources += files('x86/cpu.asm', 'x86/vt_filter.asm')
 endif
 
+cc = meson.get_compiler('c')
+core_c_args = cc.get_supported_arguments('-ffp-contract=off')
+
 core = static_library('interlace_core', core_sources,
+    c_args: core_c_args,
     gnu_symbol_visibility: 'hidden',
     pic: true,
 )
