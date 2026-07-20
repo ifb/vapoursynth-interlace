@@ -82,6 +82,14 @@ if avs_lib_dir != ''
          depends: [plugin, vs_reference])
 endif
 
+# Whole-frame benchmark: the per-row loop at real frame geometry, without a
+# VapourSynth dependency, so it can be built static and run anywhere.
+bench_frame = executable('bench_frame',
+    files('test/bench_frame.c'),
+    include_directories: include_directories('src'),
+    link_with: core,
+)
+
 checkasm_dep = dependency('checkasm', required: get_option('checkasm'), allow_fallback: true)
 if checkasm_dep.found()
     checkasm_exe = executable('checkasm',
