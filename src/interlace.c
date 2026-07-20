@@ -247,7 +247,7 @@ VS_EXTERNAL_API(void) VapourSynthPluginInit2(VSPlugin *plugin, const VSPLUGINAPI
 {
     vspapi->configPlugin("com.ifb.interlace", "interlace",
                          "Progressive to interlaced converter",
-                         VS_MAKE_VERSION(0, 1), VAPOURSYNTH_API_VERSION, 0, plugin);
+                         VS_MAKE_VERSION(0, 2), VAPOURSYNTH_API_VERSION, 0, plugin);
     vspapi->registerFunction("Interlace",
                              "clip:vnode;"
                              "tff:int:opt;"

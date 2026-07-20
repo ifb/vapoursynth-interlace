@@ -3,7 +3,7 @@ project('interlace', 'c',
     license: 'GPL-2.0-or-later',
     license_files: 'LICENSE',
     meson_version: '>=1.2.3',
-    version: '1',
+    version: '2',
 )
 
 py = import('python').find_installation(pure: false)

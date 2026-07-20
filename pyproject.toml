@@ -29,7 +29,7 @@ dynamic = ["version"]
 Repository = "https://github.com/ifb/vapoursynth-interlace"
 
 [tool.meson-python.args]
-setup = ["-Dcheckasm=disabled"]
+setup = ["-Dcheckasm=disabled", "-Davisynth=true"]
 
 [tool.meson-python.wheel]
 exclude = ["*.dll.a"]

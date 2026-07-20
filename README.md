@@ -183,6 +183,10 @@ build` runs the checkasm kernel verification (fetched as a meson subproject;
 
 Add `-Davisynth=true` to also build the AviSynth+ frontend into the same
 module; both hosts load the same file and each finds its own entry point.
+The released wheels enable it, so AviSynth+ users can take the plugin
+straight out of the win64 wheel (also published as a standalone
+`interlace.dll` build artifact).
+
 The AviSynth+ end-to-end test links libavisynth, which the repo does not
 vendor, so it joins `meson test` only when you point `-Davisynth_lib_dir`
 at the directory holding your `libavisynth.so.N`:
