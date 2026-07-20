@@ -1,6 +1,6 @@
 # vapoursynth-interlace
 
-Progressive to interlaced conversion for VapourSynth.
+Progressive to interlaced conversion for VapourSynth and AviSynth+.
 
 The filter implements the perceptually optimal interlacing filter of BBC R&D
 White Paper WHP 315 (K.C. Noland, "Optimal Interlacing using Human Sensitivity
@@ -14,6 +14,12 @@ test patterns and measurement methodology.
 
 ```python
 clip = core.interlace.Interlace(clip, tff=True, filter=True)
+```
+
+AviSynth+ takes the same arguments:
+
+```
+Interlace(tff=true, filter=true)
 ```
 
 2N progressive frames become N woven frames at half rate. `_FieldBased`
@@ -174,6 +180,17 @@ meson setup build
 Requires VapourSynth (V4 API), meson, and nasm on x86-64. `meson test -C
 build` runs the checkasm kernel verification (fetched as a meson subproject;
 `-Dcheckasm=disabled` to skip). Or `pip install vapoursynth-interlace`.
+
+Add `-Davisynth=true` to also build the AviSynth+ frontend into the same
+module; both hosts load the same file and each finds its own entry point.
+The AviSynth+ end-to-end test links libavisynth, which the repo does not
+vendor, so it joins `meson test` only when you point `-Davisynth_lib_dir`
+at the directory holding your `libavisynth.so.N`:
+
+```sh
+meson setup build -Davisynth=true -Davisynth_lib_dir=$LIBAVS
+meson test -C build
+```
 
 ## License
 

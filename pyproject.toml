@@ -26,7 +26,7 @@ dependencies = ["VapourSynth>=66"]
 dynamic = ["version"]
 
 [project.urls]
-Repository = "https://github.com/pblucas/vapoursynth-interlace"
+Repository = "https://github.com/ifb/vapoursynth-interlace"
 
 [tool.meson-python.args]
 setup = ["-Dcheckasm=disabled"]
