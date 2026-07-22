@@ -16,11 +16,13 @@ core_sources = files('src/cpu.c', 'src/vt_filter.c')
 
 if host_machine.cpu_family() == 'x86_64'
     add_languages('nasm', native: false)
-    add_project_arguments(
-        '-DARCH_X86_64=1', '-DPIC', '-Dprivate_prefix=p2i',
-        '-I' + meson.current_source_dir() / 'x86/',
-        language: 'nasm',
-    )
+    nasm_args = ['-DARCH_X86_64=1', '-DPIC', '-Dprivate_prefix=p2i',
+                 '-I' + meson.current_source_dir() / 'x86/']
+    # mach-o mangles C symbols with a leading underscore; x86inc keys that on PREFIX
+    if host_machine.system() == 'darwin'
+        nasm_args += '-DPREFIX'
+    endif
+    add_project_arguments(nasm_args, language: 'nasm')
     core_sources += files('x86/cpu.asm', 'x86/vt_filter.asm')
 endif
 

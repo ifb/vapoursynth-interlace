@@ -18,7 +18,7 @@
  * to whatever machine you want the numbers from.
  */
 
-/* clock_gettime and posix_memalign under -std=c99 */
+/* clock_gettime under -std=c99 */
 #define _POSIX_C_SOURCE 200112L
 
 #include <stdint.h>
@@ -39,6 +39,25 @@ static uint64_t now_ns(void)
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
     return (uint64_t)ts.tv_sec * 1000000000u + (uint64_t)ts.tv_nsec;
+}
+
+/* MinGW-UCRT lacks posix_memalign; over-allocate and stash the base pointer so
+ * plain free() works on every host. */
+static void *aligned_alloc64(size_t sz)
+{
+    void *base = malloc(sz + 64 + sizeof(void *));
+    if (!base)
+        return NULL;
+    uintptr_t p = (uintptr_t)base + sizeof(void *);
+    p = (p + 63) & ~(uintptr_t)63;
+    ((void **)p)[-1] = base;
+    return (void *)p;
+}
+
+static void aligned_free(void *p)
+{
+    if (p)
+        free(((void **)p)[-1]);
 }
 
 struct geom {
@@ -115,7 +134,8 @@ int main(int argc, char **argv)
             const int crows = G->h >> F->sub_h;
             const size_t fsz = (size_t)ystride * G->h + 2 * (size_t)cstride * crows;
             for (int k = 0; k < WINDOW; k++) {
-                if (posix_memalign((void **)&frames[k], 64, fsz)) {
+                frames[k] = aligned_alloc64(fsz);
+                if (!frames[k]) {
                     fprintf(stderr, "out of memory\n");
                     return 1;
                 }
@@ -136,8 +156,8 @@ int main(int argc, char **argv)
                         p[i] = (uint16_t)((p[i] & 0x83ffu) | 0x3800u);
                 }
             }
-            uint8_t *dst;
-            if (posix_memalign((void **)&dst, 64, fsz)) {
+            uint8_t *dst = aligned_alloc64(fsz);
+            if (!dst) {
                 fprintf(stderr, "out of memory\n");
                 return 1;
             }
@@ -172,8 +192,8 @@ int main(int argc, char **argv)
                    G->name, F->name, ms, luma / (best / 1e3), best / luma);
 
             for (int k = 0; k < WINDOW; k++)
-                free(frames[k]);
-            free(dst);
+                aligned_free(frames[k]);
+            aligned_free(dst);
         }
         printf("\n");
     }
