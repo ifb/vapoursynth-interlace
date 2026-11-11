@@ -198,4 +198,4 @@ meson test -C build
 
 ## License
 
-GPL-2.0-or-later.
+LGPL-2.1-or-later.

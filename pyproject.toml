@@ -7,7 +7,7 @@ name = "vapoursynth-interlace"
 description = "Progressive to interlaced converter for VapourSynth using the BBC WHP 315 optimal vertical-temporal prefilter"
 readme = "README.md"
 requires-python = ">=3.12"
-license = "GPL-2.0-or-later"
+license = "LGPL-2.1-or-later"
 license-files = ["LICENSE"]
 keywords = ["vapoursynth", "interlace", "interlacing", "broadcast"]
 classifiers = [
