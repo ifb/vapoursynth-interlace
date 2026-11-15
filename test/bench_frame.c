@@ -101,12 +101,13 @@ int main(int argc, char **argv)
         { "YUV420PH ", P2I_KIND_F16, 2,     0, 1, 1 },
     };
 
-    printf("cpu: %s%s%s%s%s\n",
+    printf("cpu: %s%s%s%s%s%s\n",
            cpu & P2I_CPU_SSE2 ? "sse2 " : "",
            cpu & P2I_CPU_AVX2 ? "avx2 " : "",
            cpu & P2I_CPU_AVXVNNI ? "avxvnni " : "",
            cpu & P2I_CPU_AVX512 ? "avx512 " : "",
-           cpu & P2I_CPU_AVX512ICL ? "avx512icl" : "");
+           cpu & P2I_CPU_AVX512ICL ? "avx512icl " : "",
+           cpu & P2I_CPU_SLOW_AVX512 ? "slow-avx512" : "");
     printf("min of %d passes, per luma pixel of the output frame\n", reps);
     printf("take the minimum across several invocations: the large-working-set\n"
            "rows (UHD f32 reads 158 MB) move with allocation placement\n\n");

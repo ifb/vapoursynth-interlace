@@ -189,19 +189,23 @@ static void VS_CC p2i_create(const VSMap *in, VSMap *out, void *user_data, VSCor
     const char *cpu_req = vsapi->mapGetData(in, "cpu", 0, &err);
     if (!err) {
         static const struct { const char *name; unsigned mask; } levels[] = {
-            { "none",   0 },
-            { "sse2",   P2I_CPU_SSE2 },
-            { "avx2",   P2I_CPU_SSE2 | P2I_CPU_AVX2 },
-            { "avx512", P2I_CPU_SSE2 | P2I_CPU_AVX2 | P2I_CPU_AVX512 },
+            { "none",      0 },
+            { "sse2",      P2I_CPU_SSE2 },
+            { "avx2",      P2I_CPU_SSE2 | P2I_CPU_AVX2 },
+            { "avxvnni",   P2I_CPU_SSE2 | P2I_CPU_AVX2 | P2I_CPU_AVXVNNI },
+            { "avx512",    P2I_CPU_SSE2 | P2I_CPU_AVX2 | P2I_CPU_AVX512 | P2I_CPU_SLOW_AVX512 },
+            { "avx512icl", P2I_CPU_SSE2 | P2I_CPU_AVX2 | P2I_CPU_AVX512 | P2I_CPU_AVX512ICL |
+                           P2I_CPU_SLOW_AVX512 },
         };
+        const int nb_levels = sizeof(levels) / sizeof(*levels);
         int i;
-        for (i = 0; i < 4; i++)
+        for (i = 0; i < nb_levels; i++)
             if (!strcmp(cpu_req, levels[i].name)) {
                 cpu &= levels[i].mask;
                 break;
             }
-        if (i == 4)
-            RETERROR("cpu must be one of none/sse2/avx2/avx512");
+        if (i == nb_levels)
+            RETERROR("cpu must be one of none/sse2/avx2/avxvnni/avx512/avx512icl");
     }
 
     if (!vsh_isConstantVideoFormat(&d.vi))

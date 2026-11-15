@@ -6,6 +6,7 @@
 #include <checkasm/test.h>
 #include <checkasm/utils.h>
 
+#include "cpu.h"
 #include "vt_filter.h"
 
 #define MAXW 1920
@@ -167,10 +168,82 @@ static void test_f16(void)
     checkasm_report("f16");
 }
 
+#define BSTRIDE ((MAXW + 64) * 2)
+static CHECKASM_ALIGN(uint8_t blk_c[2 * VT_BLOCK_MAX * BSTRIDE]);
+static CHECKASM_ALIGN(uint8_t blk_a[2 * VT_BLOCK_MAX * BSTRIDE]);
+static CHECKASM_ALIGN(uint8_t blk_tmp[VT_BLOCK_TMP]);
+
+static void setup_block_ptrs(const void *ptrs[5 * VT_BLOCK_ROWS], int run, int elem)
+{
+    for (int i = 0; i < 5 * VT_BLOCK_ROWS; i++)
+        ptrs[i] = src_buf[(i * 37 + run * 11) % VT_SRC_PTRS] + ((i * 7 + run * 13) % 32) * elem;
+}
+
+/* slow: the kernels picked where P2I_CPU_SLOW_AVX512 is set, on any AVX-512 host */
+static void test_block(int kind, int depth, int slow)
+{
+    const int elem = kind == P2I_KIND_U8 ? 1 : 2;
+    const int peak = (1 << depth) - 1;
+    const void *ptrs[5 * VT_BLOCK_ROWS];
+    int min_width;
+    checkasm_declare(void, void *, ptrdiff_t, const void *const *, void *, int, int, int,
+                     const void *);
+    unsigned cpu = checkasm_get_cpu_flags();
+    if (slow) {
+        if (!(cpu & P2I_CPU_AVX512))
+            return;
+        cpu |= P2I_CPU_SLOW_AVX512;
+    }
+    if (checkasm_check_func(p2i_get_vt_filter_block_fn(kind, depth, cpu, &min_width),
+                            "vt_filter_block_u%d%s", depth, slow ? "n" : "")) {
+        INITIALIZE_BUF(src_buf);
+        /* the kernels require samples <= peak */
+        if (kind == P2I_KIND_U16) {
+            uint16_t *s = (uint16_t *)src_buf;
+            for (size_t i = 0; i < sizeof(src_buf) / 2; i++)
+                s[i] &= peak;
+        }
+        for (int i = 0; i < NWIDTHS; i++) {
+            const int w = widths[i];
+            const void *coefs = p2i_vt_coefs(kind, i % 5);
+            if (w < min_width)
+                continue;
+            for (int nb = 1 + i % 3; nb <= VT_BLOCK_MAX; nb += 1 + i % 5) {
+                setup_block_ptrs(ptrs, i * VT_BLOCK_MAX + nb, elem);
+                memset(blk_c, 0xaa, sizeof(blk_c));
+                memset(blk_a, 0xaa, sizeof(blk_a));
+                checkasm_call_ref(blk_c, 2 * BSTRIDE, ptrs, blk_tmp, w, nb, peak, coefs);
+                checkasm_call_new(blk_a, 2 * BSTRIDE, ptrs, blk_tmp, w, nb, peak, coefs);
+                for (int k = 0; k < nb; k++) {
+                    const uint8_t *c = blk_c + k * 2 * BSTRIDE, *a = blk_a + k * 2 * BSTRIDE;
+                    if (kind == P2I_KIND_U8)
+                        checkasm_check1d(uint8_t, c, a, w, "dst");
+                    else
+                        checkasm_check1d(uint16_t, (const uint16_t *)c, (const uint16_t *)a, w, "dst");
+                }
+                /* nothing else may be written */
+                if (memcmp(blk_c, blk_a, sizeof(blk_c))) {
+                    checkasm_fail_func("write outside the lines, width %d, %d lines", w, nb);
+                    break;
+                }
+            }
+        }
+        setup_block_ptrs(ptrs, 0, elem);
+        checkasm_bench_new(blk_a, 2 * BSTRIDE, ptrs, blk_tmp, MAXW, VT_BLOCK_MAX, peak,
+                           p2i_vt_coefs(kind, P2I_SHIFT_CENTER));
+    }
+    checkasm_report("block_u%d%s", depth, slow ? "n" : "");
+}
+
 void checkasm_test_vt_filter(void)
 {
     test_u8();
     test_u16();
     test_f32();
     test_f16();
+    test_block(P2I_KIND_U8, 8, 0);
+    for (int depth = 10; depth <= 14; depth += 2) {
+        test_block(P2I_KIND_U16, depth, 0);
+        test_block(P2I_KIND_U16, depth, 1);
+    }
 }

@@ -144,15 +144,30 @@ VT_BLOCK_C(u16)
 #if defined(__x86_64__)
 #define HAVE_X86_ASM 1
 
-#define DECL_KERNELS(isa) \
-    void p2i_vt_filter_line_u8_##isa(void *, const void *const *, int, int, const void *); \
-    void p2i_vt_filter_line_u16_##isa(void *, const void *const *, int, int, const void *); \
-    void p2i_vt_filter_line_f32_##isa(void *, const void *const *, int, int, const void *);
-DECL_KERNELS(sse2)
-DECL_KERNELS(avx2)
-DECL_KERNELS(avx512)
-void p2i_vt_filter_line_f16_avx2(void *, const void *const *, int, int, const void *);
-void p2i_vt_filter_line_f16_avx512(void *, const void *const *, int, int, const void *);
+#define DECL_LINE(type, isa) \
+    void p2i_vt_filter_line_##type##_##isa(void *, const void *const *, int, int, const void *);
+#define DECL_BLOCK(isa) \
+    void p2i_vt_filter_block_u8_##isa(void *, ptrdiff_t, const void *const *, void *, int, \
+                                      int, int, const void *);                             \
+    void p2i_vt_filter_block_u16_##isa(void *, ptrdiff_t, const void *const *, void *, int, \
+                                       int, int, const void *);
+DECL_LINE(u16, sse2)
+DECL_LINE(f32, sse2)
+DECL_LINE(u16, avx2)
+DECL_LINE(f32, avx2)
+DECL_LINE(f16, avx2)
+DECL_LINE(u16, avx512)
+DECL_LINE(f32, avx512)
+DECL_LINE(f16, avx512)
+DECL_BLOCK(sse2)
+DECL_BLOCK(avx2)
+DECL_BLOCK(avxvnni)
+DECL_BLOCK(avx512)
+DECL_BLOCK(avx512icl)
+void p2i_vt_filter_block_u16n_avx512(void *, ptrdiff_t, const void *const *, void *, int, int, int,
+                                     const void *);
+void p2i_vt_filter_block_u16n_avx512icl(void *, ptrdiff_t, const void *const *, void *, int, int,
+                                        int, const void *);
 #endif
 
 vt_filter_line_fn p2i_get_vt_filter_fn(int kind, unsigned cpu)
@@ -162,17 +177,18 @@ vt_filter_line_fn p2i_get_vt_filter_fn(int kind, unsigned cpu)
     };
     vt_filter_line_fn fn = fns_c[kind];
 #if HAVE_X86_ASM
-    /* no sse2 f16 kernel (F16C implies AVX); C covers it */
+    /* u8 has block kernels only, and f16 none below AVX2 (F16C); C covers
+       both */
     static const vt_filter_line_fn fns_sse2[4] = {
-        p2i_vt_filter_line_u8_sse2, p2i_vt_filter_line_u16_sse2,
+        vt_filter_line_u8, p2i_vt_filter_line_u16_sse2,
         p2i_vt_filter_line_f32_sse2, vt_filter_line_f16,
     };
     static const vt_filter_line_fn fns_avx2[4] = {
-        p2i_vt_filter_line_u8_avx2, p2i_vt_filter_line_u16_avx2,
+        vt_filter_line_u8, p2i_vt_filter_line_u16_avx2,
         p2i_vt_filter_line_f32_avx2, p2i_vt_filter_line_f16_avx2,
     };
     static const vt_filter_line_fn fns_avx512[4] = {
-        p2i_vt_filter_line_u8_avx512, p2i_vt_filter_line_u16_avx512,
+        vt_filter_line_u8, p2i_vt_filter_line_u16_avx512,
         p2i_vt_filter_line_f32_avx512, p2i_vt_filter_line_f16_avx512,
     };
     if (cpu & P2I_CPU_SSE2)
@@ -189,10 +205,41 @@ vt_filter_line_fn p2i_get_vt_filter_fn(int kind, unsigned cpu)
 
 vt_filter_block_fn p2i_get_vt_filter_block_fn(int kind, int depth, unsigned cpu, int *min_width)
 {
+    const int u8 = kind == P2I_KIND_U8;
+    vt_filter_block_fn fn = u8 ? vt_filter_block_u8 : vt_filter_block_u16;
+    *min_width = 0;
+#if HAVE_X86_ASM
+    /* the kernels add sample pairs in int16 */
+    if (depth > 14)
+        return fn;
+#define SET_BLOCK(isa, width_u8, width_u16) do {                                     \
+        fn = u8 ? p2i_vt_filter_block_u8_##isa : p2i_vt_filter_block_u16_##isa;      \
+        *min_width = u8 ? width_u8 : width_u16;                                      \
+    } while (0)
+    if (cpu & P2I_CPU_SSE2)
+        SET_BLOCK(sse2, 16, 16);
+    if (cpu & P2I_CPU_AVX2)
+        SET_BLOCK(avx2, 32, 32);
+    if (cpu & P2I_CPU_AVXVNNI)
+        SET_BLOCK(avxvnni, 32, 32);
+    if (cpu & P2I_CPU_AVX512)
+        SET_BLOCK(avx512, 64, 64);
+    if (cpu & P2I_CPU_AVX512ICL)
+        SET_BLOCK(avx512icl, 64, 64);
+    if (!u8 && (cpu & P2I_CPU_SLOW_AVX512)) {
+        if (cpu & P2I_CPU_AVX512) {
+            fn = p2i_vt_filter_block_u16n_avx512;
+            *min_width = 32;
+        }
+        if (cpu & P2I_CPU_AVX512ICL)
+            fn = p2i_vt_filter_block_u16n_avx512icl;
+    }
+#undef SET_BLOCK
+#else
     (void)depth;
     (void)cpu;
-    *min_width = 0;
-    return kind == P2I_KIND_U8 ? vt_filter_block_u8 : vt_filter_block_u16;
+#endif
+    return fn;
 }
 
 void p2i_vt_filter_init(vt_filter_t *f, int kind, int depth, unsigned cpu)

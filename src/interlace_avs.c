@@ -197,20 +197,24 @@ static AVS_Value AVSC_CC p2i_avs_create(AVS_ScriptEnvironment *env,
     unsigned cpu = p2i_cpu_detect();
     if (avs_defined(avs_array_elt(args, 3))) {
         static const struct { const char *name; unsigned mask; } levels[] = {
-            { "none",   0 },
-            { "sse2",   P2I_CPU_SSE2 },
-            { "avx2",   P2I_CPU_SSE2 | P2I_CPU_AVX2 },
-            { "avx512", P2I_CPU_SSE2 | P2I_CPU_AVX2 | P2I_CPU_AVX512 },
+            { "none",      0 },
+            { "sse2",      P2I_CPU_SSE2 },
+            { "avx2",      P2I_CPU_SSE2 | P2I_CPU_AVX2 },
+            { "avxvnni",   P2I_CPU_SSE2 | P2I_CPU_AVX2 | P2I_CPU_AVXVNNI },
+            { "avx512",    P2I_CPU_SSE2 | P2I_CPU_AVX2 | P2I_CPU_AVX512 | P2I_CPU_SLOW_AVX512 },
+            { "avx512icl", P2I_CPU_SSE2 | P2I_CPU_AVX2 | P2I_CPU_AVX512 | P2I_CPU_AVX512ICL |
+                           P2I_CPU_SLOW_AVX512 },
         };
+        const int nb_levels = sizeof(levels) / sizeof(*levels);
         const char *cpu_req = avs_as_string(avs_array_elt(args, 3));
         int i;
-        for (i = 0; i < 4; i++)
+        for (i = 0; i < nb_levels; i++)
             if (!strcmp(cpu_req, levels[i].name)) {
                 cpu &= levels[i].mask;
                 break;
             }
-        if (i == 4)
-            return avs_new_value_error("Interlace: cpu must be one of none/sse2/avx2/avx512");
+        if (i == nb_levels)
+            return avs_new_value_error("Interlace: cpu must be one of none/sse2/avx2/avxvnni/avx512/avx512icl");
     }
 
     AVS_Clip *src_clip = avs_take_clip(clip_v, env);

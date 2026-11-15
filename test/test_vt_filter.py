@@ -80,6 +80,30 @@ for fmt, dtype, peak in [(vs.GRAY8, np.uint8, 255), (vs.GRAY16, np.uint16, 65535
                 assert np.array_equal(got[p], want), (fmt, tff, n, p)
     print(f'{src.format.name}: bit-exact vs reference (both field orders)')
 
+# wide enough for the block kernels, with several bands of lines and a
+# partial last one; every cpu level against the reference
+LEVELS = ('none', 'sse2', 'avx2', 'avxvnni', 'avx512', 'avx512icl')
+for fmt, dtype, peak, w, h in [(vs.YUV420P8, np.uint8, 255, 144, 52),
+                               (vs.YUV422P10, np.uint16, 1023, 160, 30),
+                               (vs.YUV420P14, np.uint16, 16383, 136, 76)]:
+    src = core.std.BlankClip(format=fmt, width=w, height=h, length=6, fpsnum=50, fpsden=1)
+    sw, sh = src.format.subsampling_w, src.format.subsampling_h
+    frames = [[rng.integers(0, peak + 1, (h >> (p and sh), w >> (p and sw)), dtype=dtype)
+               for p in range(3)] for _ in range(6)]
+    src = core.std.ModifyFrame(src, src, lambda n, f, frames=frames: (
+        lambda fo: ([np.copyto(np.asarray(fo[p]), frames[n][p]) for p in range(3)], fo)[1]
+    )(f.copy()))
+    for tff in (True, False):
+        want = [ref([fr[p] for fr in frames], tff, True, peak,
+                    (CI_S['M125'], CI_S['P125']) if p and sh else None) for p in range(3)]
+        for level in LEVELS:
+            out = core.interlace.Interlace(src, tff=tff, cpu=level)
+            for n in range(3):
+                got = planes(out, n)
+                for p in range(3):
+                    assert np.array_equal(got[p], want[p][n]), (fmt, tff, level, n, p)
+    print(f'{src.format.name} {w}x{h}: bit-exact vs reference at every cpu level')
+
 frames = [[rng.random((12, 24), np.float32)] for _ in range(9)]
 src = core.std.BlankClip(format=vs.GRAYS, width=24, height=12, length=9, fpsnum=50, fpsden=1)
 src = core.std.ModifyFrame(src, src, lambda n, f: (
@@ -142,7 +166,7 @@ fsrc = core.std.ModifyFrame(fsrc, fsrc, lambda n, f: (
     lambda fo: (np.copyto(np.asarray(fo[0]), ffr[n][0]), fo)[1])(f.copy()))
 ref_i = planes(core.interlace.Interlace(src, cpu='none'), 1)[0]
 ref_f = planes(core.interlace.Interlace(fsrc, cpu='none'), 1)[0]
-for level in ('sse2', 'avx2', 'avx512'):
+for level in LEVELS[1:]:
     got = planes(core.interlace.Interlace(src, cpu=level), 1)[0]
     assert np.array_equal(got, ref_i), level
     gotf = planes(core.interlace.Interlace(fsrc, cpu=level), 1)[0]
@@ -152,6 +176,6 @@ try:
     sys.exit('accepted bad cpu')
 except vs.Error as e:
     assert 'cpu' in str(e)
-print('cpu levels consistent (none/sse2/avx2/avx512)')
+print('cpu levels consistent (' + '/'.join(LEVELS) + ')')
 
 print('all VT filter tests pass')

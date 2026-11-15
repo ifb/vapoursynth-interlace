@@ -37,12 +37,15 @@ is set and frame durations doubled.
   `filter=False` fields are woven with no filtering, which aliases. Only
   useful as a worst-case reference.
 - `cpu` — cap the instruction set used, for testing and debugging:
-  `"none"` (plain C), `"sse2"`, `"avx2"` or `"avx512"`. Default: everything
-  the host supports. Levels the hardware lacks are simply not used.
+  `"none"` (plain C), `"sse2"`, `"avx2"`, `"avxvnni"`, `"avx512"` or
+  `"avx512icl"`. Default: everything the host supports. Levels the hardware
+  lacks are simply not used.
 
 Same filter on all planes (per WHP 230); zero phase, so no chroma/luma
-timing shift. SSE2/AVX2/AVX-512 selected at runtime. Integer output is
-bit-identical to the C implementation on every path. Float paths use FMA
+timing shift. SSE2, AVX2, AVX-VNNI, AVX-512 and AVX-512 VNNI kernels are
+selected at runtime. Integer output is bit-identical to the C implementation
+on every path, provided the samples are within the format's bit depth (a
+10-bit clip must not hold values above 1023). Float paths use FMA
 on AVX2 and above, so float output can differ from C by a few ulp
 (~1e-6 relative). The fused sum skips one rounding per tap and is the more
 accurate of the two.
