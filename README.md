@@ -39,7 +39,8 @@ is set and frame durations doubled.
 - `cpu` — cap the instruction set used, for testing and debugging:
   `"none"` (plain C), `"sse2"`, `"avx2"`, `"avxvnni"`, `"avx512"` or
   `"avx512icl"`. Default: everything the host supports. Levels the hardware
-  lacks are simply not used.
+  lacks are simply not used, and the per-CPU builds (see Installing) never
+  go below the level they were built for.
 
 Same filter on all planes (per WHP 230); zero phase, so no chroma/luma
 timing shift. SSE2, AVX2, AVX-VNNI, AVX-512 and AVX-512 VNNI kernels are
@@ -173,6 +174,30 @@ scorecard above: **Lanczos4 is the measured pick for 2160p→1080i**, with
 Spline36/Spline64 as slightly softer, marginally cleaner-far-field
 alternatives.
 
+## Installing
+
+**VapourSynth** (R75 or later): `pip install vapoursynth-interlace`, or copy
+the `interlace` folder (the module, its `.avx2`, `.avx512` and `.zn4` builds,
+and `manifest.vs`) into your plugins autoload dir as is. VapourSynth loads
+the highest-level build the CPU supports. With `core.std.LoadPlugin(...)`,
+give it the plain `interlace.so` / `interlace.dll` path and the same choice
+applies.
+
+**AviSynth+:** AviSynth+ does not choose between the builds, so put exactly
+one of them in your plugins directory (or `LoadCPlugin` it):
+
+| file | needs | CPUs |
+|---|---|---|
+| `interlace.dll` | SSE2 | any x86-64 |
+| `interlace.avx2.dll` | x86-64-v3 (AVX2, FMA, BMI2) | Intel Haswell and later, AMD Excavator and Zen |
+| `interlace.avx512.dll` | x86-64-v4 (AVX-512 F/BW/CD/DQ/VL) | Intel Skylake-X, Ice Lake, Tiger Lake, Sapphire Rapids; AMD Zen 4 and later |
+| `interlace.zn4.dll` | the Zen 4 instruction set | AMD Zen 4 and later |
+
+A build for a level the CPU lacks crashes, and two builds in the plugins
+directory both get loaded. `interlace.dll` is always safe: it still picks
+the fastest kernels the CPU has at run time, and the others differ only in
+how the surrounding C is compiled.
+
 ## Building
 
 ```sh
@@ -187,8 +212,8 @@ build` runs the checkasm kernel verification (fetched as a meson subproject;
 Add `-Davisynth=true` to also build the AviSynth+ frontend into the same
 module; both hosts load the same file and each finds its own entry point.
 The released wheels enable it, so AviSynth+ users can take the plugin
-straight out of the win64 wheel (also published as a standalone
-`interlace.dll` build artifact).
+straight out of the win64 wheel (the four builds are also published as a
+standalone build artifact).
 
 The AviSynth+ end-to-end test links libavisynth, which the repo does not
 vendor, so it joins `meson test` only when you point `-Davisynth_lib_dir`

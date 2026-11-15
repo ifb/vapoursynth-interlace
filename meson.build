@@ -23,17 +23,40 @@ if host_machine.cpu_family() == 'x86_64'
         nasm_args += '-DPREFIX'
     endif
     add_project_arguments(nasm_args, language: 'nasm')
-    core_sources += files('x86/cpu.asm', 'x86/vt_filter.asm')
+    # The asm picks its own tier at run time, so every build shares it.
+    asm_libs = [static_library('interlace_asm',
+        files('x86/cpu.asm', 'x86/vt_filter.asm'), pic: true)]
+else
+    asm_libs = []
 endif
 
 cc = meson.get_compiler('c')
 core_c_args = cc.get_supported_arguments('-ffp-contract=off')
 
-core = static_library('interlace_core', core_sources,
-    c_args: core_c_args,
-    gnu_symbol_visibility: 'hidden',
-    pic: true,
-)
+# The C is built once per x86 instruction-set level VapourSynth can
+# choose from: with name.so listed in a manifest, it loads name.avx2.so,
+# name.avx512.so or name.zn4.so when the CPU has the level and the file
+# exists. The flags are the ones VapourSynth documents for each level.
+cpu_levels = [['', []]]
+if host_machine.cpu_family() == 'x86_64'
+    cpu_levels += [
+        ['.avx2', ['-march=x86-64-v3']],
+        ['.avx512', ['-march=x86-64-v4']],
+        ['.zn4', ['-march=znver4', '-mno-sse4a', '-mno-avx512bf16']],
+    ]
+endif
+
+cores = []
+foreach level : cpu_levels
+    cores += static_library('interlace_core' + level[0].replace('.', '_'),
+        core_sources,
+        c_args: core_c_args + level[1],
+        gnu_symbol_visibility: 'hidden',
+        link_with: asm_libs,
+        pic: true,
+    )
+endforeach
+core = cores[0]
 
 # One module serves both hosts, as ffms2 does: each looks up only its own
 # entry point (VapourSynthPluginInit2 / avisynth_c_plugin_init), so the
@@ -47,15 +70,30 @@ if get_option('avisynth')
     plugin_incdirs += include_directories('third_party/avisynth')
 endif
 
-plugin = shared_module('interlace',
-    plugin_sources,
-    gnu_symbol_visibility: 'hidden',
-    include_directories: plugin_incdirs,
-    install: true,
-    install_dir: py.get_install_dir() / 'vapoursynth/plugins',
-    link_with: core,
-    name_prefix: '',
-)
+# VapourSynth autoloads every module in the root of its plugins dir, but
+# consults a manifest.vs only in a subdirectory, and only plugins listed
+# in a manifest (or given to LoadPlugin) get the per-CPU builds picked
+# for them.
+plugin_install_dir = py.get_install_dir() / 'vapoursynth/plugins/interlace'
+
+plugins = []
+foreach i : range(cpu_levels.length())
+    level = cpu_levels[i]
+    plugins += shared_module('interlace' + level[0],
+        plugin_sources,
+        c_args: level[1],
+        gnu_symbol_visibility: 'hidden',
+        include_directories: plugin_incdirs,
+        install: true,
+        install_dir: plugin_install_dir,
+        link_args: level[1],
+        link_with: cores[i],
+        name_prefix: '',
+    )
+endforeach
+plugin = plugins[0]
+
+install_data('manifest.vs', install_dir: plugin_install_dir)
 
 # AviSynth+ end-to-end test. It links an external libavisynth, which the
 # repo does not vendor and CI does not provide, so it registers only when

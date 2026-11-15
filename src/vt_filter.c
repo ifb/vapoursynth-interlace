@@ -176,6 +176,7 @@ vt_filter_line_fn p2i_get_vt_filter_fn(int kind, unsigned cpu)
         vt_filter_line_u8, vt_filter_line_u16, vt_filter_line_f32, vt_filter_line_f16,
     };
     vt_filter_line_fn fn = fns_c[kind];
+    cpu |= P2I_CPU_BUILTIN;
 #if HAVE_X86_ASM
     /* u8 has block kernels only, and f16 none below AVX2 (F16C); C covers
        both */
@@ -197,8 +198,6 @@ vt_filter_line_fn p2i_get_vt_filter_fn(int kind, unsigned cpu)
         fn = fns_avx2[kind];
     if (cpu & P2I_CPU_AVX512)
         fn = fns_avx512[kind];
-#else
-    (void)cpu;
 #endif
     return fn;
 }
@@ -208,6 +207,7 @@ vt_filter_block_fn p2i_get_vt_filter_block_fn(int kind, int depth, unsigned cpu,
     const int u8 = kind == P2I_KIND_U8;
     vt_filter_block_fn fn = u8 ? vt_filter_block_u8 : vt_filter_block_u16;
     *min_width = 0;
+    cpu |= P2I_CPU_BUILTIN;
 #if HAVE_X86_ASM
     /* the kernels add sample pairs in int16 */
     if (depth > 14)
@@ -237,7 +237,6 @@ vt_filter_block_fn p2i_get_vt_filter_block_fn(int kind, int depth, unsigned cpu,
 #undef SET_BLOCK
 #else
     (void)depth;
-    (void)cpu;
 #endif
     return fn;
 }
