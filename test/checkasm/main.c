@@ -7,7 +7,9 @@ void checkasm_test_vt_filter(void);
 static const CheckasmCpuInfo cpu_flags[] = {
     { "SSE2", "sse2", P2I_CPU_SSE2 },
     { "AVX2", "avx2", P2I_CPU_AVX2 },
+    { "AVX-VNNI", "avxvnni", P2I_CPU_AVXVNNI },
     { "AVX512", "avx512", P2I_CPU_AVX512 },
+    { "AVX512ICL", "avx512icl", P2I_CPU_AVX512ICL },
     {0}
 };
 
