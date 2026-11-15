@@ -121,6 +121,26 @@ static void vt_filter_line_f16(void *dstv, const void *const *srcv, int width, i
     }
 }
 
+/* reference: one line call per output line */
+#define VT_BLOCK_C(name) \
+static void vt_filter_block_##name(void *dst, ptrdiff_t dst_stride, const void *const *src, \
+                                   void *tmp, int width, int nb_rows, int peak,             \
+                                   const void *coefs)                                       \
+{                                                                                           \
+    (void)tmp;                                                                              \
+    for (int k = 0; k < nb_rows; k++) {                                                     \
+        const void *ptrs[VT_SRC_PTRS];                                                      \
+        for (int t = 0; t < VT_TAPS_T; t++)                                                 \
+            for (int v = 0; v < VT_TAPS_V; v++)                                             \
+                ptrs[t * VT_TAPS_V + v] = src[t * VT_BLOCK_ROWS + 2 * k + v];               \
+        ptrs[VT_SRC_PTRS - 1] = ptrs[VT_SRC_PTRS - 2];                                      \
+        vt_filter_line_##name((uint8_t *)dst + k * dst_stride, ptrs, width, peak, coefs);   \
+    }                                                                                       \
+}
+
+VT_BLOCK_C(u8)
+VT_BLOCK_C(u16)
+
 #if defined(__x86_64__)
 #define HAVE_X86_ASM 1
 
@@ -165,4 +185,67 @@ vt_filter_line_fn p2i_get_vt_filter_fn(int kind, unsigned cpu)
     (void)cpu;
 #endif
     return fn;
+}
+
+vt_filter_block_fn p2i_get_vt_filter_block_fn(int kind, int depth, unsigned cpu, int *min_width)
+{
+    (void)depth;
+    (void)cpu;
+    *min_width = 0;
+    return kind == P2I_KIND_U8 ? vt_filter_block_u8 : vt_filter_block_u16;
+}
+
+void p2i_vt_filter_init(vt_filter_t *f, int kind, int depth, unsigned cpu)
+{
+    f->line = p2i_get_vt_filter_fn(kind, cpu);
+    f->block = NULL;
+    f->block_min_width = 0;
+    if (kind == P2I_KIND_U8 || kind == P2I_KIND_U16)
+        f->block = p2i_get_vt_filter_block_fn(kind, depth, cpu, &f->block_min_width);
+}
+
+static int clip_line(int line, int rows)
+{
+    return line < 0 ? 0 : line >= rows ? rows - 1 : line;
+}
+
+/* output line r = progressive line r of the frame supplying that field,
+   VT-filtered; line edges repeated */
+void p2i_vt_filter_plane(const vt_filter_t *f, uint8_t *dst, ptrdiff_t dst_stride,
+                         const uint8_t *const *base, const ptrdiff_t *stride,
+                         int width, int rows, int tff, int peak, const void *const *coefs)
+{
+    const int top_off = !tff;
+
+    if (f->block_min_width && width >= f->block_min_width) {
+        uint8_t tmp_buf[VT_BLOCK_TMP + 63];
+        void *tmp = (void *)(((uintptr_t)tmp_buf + 63) & ~(uintptr_t)63);
+
+        /* both parities of a band in turn: the second finds the 4 frames
+           they share in cache */
+        for (int r0 = 0; r0 < rows; r0 += 2 * VT_BLOCK_MAX)
+            for (int r = r0; r < r0 + 2 && r < rows; r++) {
+                const int left = (rows - r + 1) / 2;
+                const int o = (r & 1) ^ top_off;
+                const void *ptrs[VT_TAPS_T * VT_BLOCK_ROWS];
+                for (int t = 0; t < VT_TAPS_T; t++)
+                    for (int j = 0; j < VT_BLOCK_ROWS; j++)
+                        ptrs[t * VT_BLOCK_ROWS + j] = base[o + t] +
+                            clip_line(r + j - VT_TAPS_V / 2, rows) * stride[o + t];
+                f->block(dst + r * dst_stride, 2 * dst_stride, ptrs, tmp, width,
+                         left < VT_BLOCK_MAX ? left : VT_BLOCK_MAX, peak, coefs[r & 1]);
+            }
+        return;
+    }
+
+    for (int r = 0; r < rows; r++) {
+        const int o = (r & 1) ^ top_off;
+        const void *ptrs[VT_SRC_PTRS];
+        for (int t = 0; t < VT_TAPS_T; t++)
+            for (int v = 0; v < VT_TAPS_V; v++)
+                ptrs[t * VT_TAPS_V + v] = base[o + t] +
+                    clip_line(r + v - VT_TAPS_V / 2, rows) * stride[o + t];
+        ptrs[VT_SRC_PTRS - 1] = ptrs[VT_SRC_PTRS - 2];
+        f->line(dst + r * dst_stride, ptrs, width, peak, coefs[r & 1]);
+    }
 }

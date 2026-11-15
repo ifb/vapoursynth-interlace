@@ -1,14 +1,13 @@
 /*
  * Whole-frame benchmark for the vertical-temporal filter.
  *
- *   bench_frame [reps]
+ *   bench_frame [reps [cpu mask]]
  *
  * checkasm --bench times one line with its 96 source pointers already hot,
  * which answers "how fast is the kernel" but not "how fast is the filter at
- * a real frame size". This drives the same per-row loop src/interlace.c
- * runs — 96 line pointers rebuilt per output row, edges clamped, all planes —
- * over HD and UHD geometry, so the cost includes the memory behaviour of
- * walking a real frame.
+ * a real frame size". This drives the plane loop the frontends run, all
+ * planes, over HD and UHD geometry, so the cost includes the memory
+ * behaviour of walking a real frame.
  *
  * Reports the minimum over `reps` passes (default 9). Minimums, not means:
  * the distribution is one-sided, so the fastest pass is the one least
@@ -73,30 +72,21 @@ struct fmt {
     int sub_w, sub_h;   /* chroma subsampling shifts */
 };
 
-/* One plane, one output frame: the row loop from src/interlace.c. */
-static void filter_plane(vt_filter_line_fn fn, uint8_t *dst, ptrdiff_t dst_stride,
+static void filter_plane(const vt_filter_t *vt, uint8_t *dst, ptrdiff_t dst_stride,
                          uint8_t *const *base, ptrdiff_t stride,
                          int rows, int width, int peak, const void *coefs, int tff)
 {
-    const int top_off = tff ? 0 : 1;
-    for (int r = 0; r < rows; r++) {
-        const int o = (r & 1) ? !top_off : top_off;
-        const void *ptrs[VT_SRC_PTRS];
-        for (int t = 0; t < VT_TAPS_T; t++)
-            for (int v = 0; v < VT_TAPS_V; v++) {
-                int line = r + v - VT_TAPS_V / 2;
-                line = line < 0 ? 0 : (line >= rows ? rows - 1 : line);
-                ptrs[t * VT_TAPS_V + v] = base[o + t] + (ptrdiff_t)line * stride;
-            }
-        ptrs[VT_TAPS_T * VT_TAPS_V] = ptrs[VT_TAPS_T * VT_TAPS_V - 1];
-        fn(dst + (ptrdiff_t)r * dst_stride, ptrs, width, peak, coefs);
-    }
+    const ptrdiff_t strides[WINDOW] = { stride, stride, stride, stride, stride, stride };
+    const void *both[2] = { coefs, coefs };
+    p2i_vt_filter_plane(vt, dst, dst_stride, (const uint8_t *const *)base, strides, width,
+                        rows, tff, peak, both);
 }
 
 int main(int argc, char **argv)
 {
     const int reps = argc > 1 ? atoi(argv[1]) : 9;
-    const unsigned cpu = p2i_cpu_detect();
+    /* optional mask, e.g. 0x3 for sse2+avx2 */
+    const unsigned cpu = p2i_cpu_detect() & (argc > 2 ? (unsigned)strtoul(argv[2], NULL, 0) : ~0u);
 
     static const struct geom geoms[] = {
         { "HD  1920x1080", 1920, 1080 },
@@ -105,15 +95,18 @@ int main(int argc, char **argv)
     static const struct fmt fmts[] = {
         { "YUV420P8 ", P2I_KIND_U8,  1,   255, 1, 1 },
         { "YUV422P10", P2I_KIND_U16, 2,  1023, 1, 0 },
+        { "YUV420P10", P2I_KIND_U16, 2,  1023, 1, 1 },
         { "YUV420P16", P2I_KIND_U16, 2, 65535, 1, 1 },
         { "YUV420PS ", P2I_KIND_F32, 4,     0, 1, 1 },
         { "YUV420PH ", P2I_KIND_F16, 2,     0, 1, 1 },
     };
 
-    printf("cpu: %s%s%s\n",
+    printf("cpu: %s%s%s%s%s\n",
            cpu & P2I_CPU_SSE2 ? "sse2 " : "",
            cpu & P2I_CPU_AVX2 ? "avx2 " : "",
-           cpu & P2I_CPU_AVX512 ? "avx512" : "");
+           cpu & P2I_CPU_AVXVNNI ? "avxvnni " : "",
+           cpu & P2I_CPU_AVX512 ? "avx512 " : "",
+           cpu & P2I_CPU_AVX512ICL ? "avx512icl" : "");
     printf("min of %d passes, per luma pixel of the output frame\n", reps);
     printf("take the minimum across several invocations: the large-working-set\n"
            "rows (UHD f32 reads 158 MB) move with allocation placement\n\n");
@@ -124,7 +117,11 @@ int main(int argc, char **argv)
         for (size_t f = 0; f < sizeof(fmts) / sizeof(*fmts); f++) {
             const struct geom *G = &geoms[g];
             const struct fmt *F = &fmts[f];
-            vt_filter_line_fn fn = p2i_get_vt_filter_fn(F->kind, cpu);
+            vt_filter_t vt;
+            int depth = 0;
+            while (F->peak >> depth)
+                depth++;
+            p2i_vt_filter_init(&vt, F->kind, depth, cpu);
             const void *coefs = p2i_vt_coefs(F->kind, P2I_SHIFT_CENTER);
 
             /* one luma plane + two chroma planes per input frame */
@@ -146,7 +143,12 @@ int main(int argc, char **argv)
                  * apiece — that would time the FPU's denormal handling
                  * rather than the filter. Pin the exponent to [0.5,1) the
                  * way the checkasm test does. */
-                if (F->kind == P2I_KIND_F32) {
+                if (F->kind == P2I_KIND_U16) {
+                    /* the block kernels need samples within the depth */
+                    uint16_t *p = (uint16_t *)frames[k];
+                    for (size_t i = 0; i < fsz / 2; i++)
+                        p[i] &= F->peak;
+                } else if (F->kind == P2I_KIND_F32) {
                     uint32_t *p = (uint32_t *)frames[k];
                     for (size_t i = 0; i < fsz / 4; i++)
                         p[i] = (p[i] & 0x807fffffu) | 0x3f000000u;
@@ -175,11 +177,11 @@ int main(int argc, char **argv)
             uint64_t best = ~0ull;
             for (int r = 0; r < reps; r++) {
                 const uint64_t t0 = now_ns();
-                filter_plane(fn, dy, ystride, ybase, ystride, G->h, G->w,
+                filter_plane(&vt, dy, ystride, ybase, ystride, G->h, G->w,
                              F->peak, coefs, 1);
-                filter_plane(fn, du, cstride, ubase, cstride, crows,
+                filter_plane(&vt, du, cstride, ubase, cstride, crows,
                              G->w >> F->sub_w, F->peak, coefs, 1);
-                filter_plane(fn, dv, cstride, vbase, cstride, crows,
+                filter_plane(&vt, dv, cstride, vbase, cstride, crows,
                              G->w >> F->sub_w, F->peak, coefs, 1);
                 const uint64_t dt = now_ns() - t0;
                 if (dt < best)

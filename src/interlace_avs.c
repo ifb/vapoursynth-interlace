@@ -55,7 +55,7 @@ struct p2i_avs_t {
     int num_planes;
     int bytes_per_sample;
     int subsampling_h;
-    vt_filter_line_fn vt_filter_line;
+    vt_filter_t vt;
 };
 
 static AVS_VideoFrame *AVSC_CC p2i_avs_get_frame(AVS_FilterInfo *fi, int n)
@@ -131,20 +131,13 @@ static AVS_VideoFrame *AVSC_CC p2i_avs_get_frame(AVS_FilterInfo *fi, int n)
         }
 
         const void *center = p2i_vt_coefs(f->kind, P2I_SHIFT_CENTER);
-        const int sited = p > 0 && f->chroma_sited;
-        const int top_off = f->tff ? 0 : 1;
-        for (int r = 0; r < rows; r++) {
-            const int o = (r & 1) ? !top_off : top_off;
-            const void *ptrs[VT_SRC_PTRS];
-            for (int t = 0; t < VT_TAPS_T; t++)
-                for (int v = 0; v < VT_TAPS_V; v++) {
-                    int line = P2I_MIN(P2I_MAX(r + v - VT_TAPS_V / 2, 0), rows - 1);
-                    ptrs[t * VT_TAPS_V + v] = base[o + t] + line * stride[o + t];
-                }
-            ptrs[VT_TAPS_T * VT_TAPS_V] = ptrs[VT_TAPS_T * VT_TAPS_V - 1];
-            f->vt_filter_line(dstp + r * dst_stride, ptrs, width, f->peak,
-                              sited ? chroma_coefs[r & 1] : center);
+        const void *coefs[2] = { center, center };
+        if (p > 0 && f->chroma_sited) {
+            coefs[0] = chroma_coefs[0];
+            coefs[1] = chroma_coefs[1];
         }
+        p2i_vt_filter_plane(&f->vt, dstp, dst_stride, base, stride, width, rows, f->tff,
+                            f->peak, coefs);
     }
 
     AVS_Map *props = avs_get_frame_props_rw(env, dst);
@@ -273,7 +266,7 @@ static AVS_Value AVSC_CC p2i_avs_create(AVS_ScriptEnvironment *env,
         /* AviSynth+ has no half-float format, so f32 is the only float kind */
         f->kind = is_float ? P2I_KIND_F32
                            : (comp_size == 1 ? P2I_KIND_U8 : P2I_KIND_U16);
-        f->vt_filter_line = p2i_get_vt_filter_fn(f->kind, cpu);
+        p2i_vt_filter_init(&f->vt, f->kind, bits, cpu);
         f->peak = is_float ? 0 : (1 << bits) - 1;
         f->chroma_sited = sub_h > 0;
     }
