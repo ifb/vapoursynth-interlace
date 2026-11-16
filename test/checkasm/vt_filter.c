@@ -235,6 +235,70 @@ static void test_block(int kind, int depth, int slow)
     checkasm_report("block_u%d%s", depth, slow ? "n" : "");
 }
 
+static void test_block_flt(int kind)
+{
+    const int f32 = kind == P2I_KIND_F32;
+    const int elem = f32 ? 4 : 2;
+    const void *ptrs[5 * VT_BLOCK_ROWS];
+    int min_width;
+    checkasm_declare(void, void *, ptrdiff_t, const void *const *, void *, int, int, int,
+                     const void *);
+    if (checkasm_check_func(p2i_get_vt_filter_block_fn(kind, 0, checkasm_get_cpu_flags(),
+                                                       &min_width),
+                            "vt_filter_block_%s", f32 ? "f32" : "f16")) {
+        INITIALIZE_BUF(src_buf);
+        /* +/-[0.5,1), as the line tests */
+        if (f32) {
+            uint32_t *bits = (uint32_t *)src_buf;
+            for (size_t i = 0; i < sizeof(src_buf) / 4; i++)
+                bits[i] = (bits[i] & 0x807fffffu) | 0x3f000000u;
+        } else {
+            uint16_t *h = (uint16_t *)src_buf;
+            for (size_t i = 0; i < sizeof(src_buf) / 2; i++)
+                h[i] = (h[i] & 0x83ff) | 0x3800;
+        }
+        for (int i = 0; i < NWIDTHS; i++) {
+            const int w = widths[i];
+            const void *coefs = p2i_vt_coefs(kind, i % 5);
+            if (w < min_width)
+                continue;
+            for (int nb = 1 + i % 3; nb <= VT_BLOCK_MAX; nb += 1 + i % 5) {
+                setup_block_ptrs(ptrs, i * VT_BLOCK_MAX + nb, elem);
+                memset(blk_c, 0xaa, sizeof(blk_c));
+                memset(blk_a, 0xaa, sizeof(blk_a));
+                checkasm_call_ref(blk_c, 2 * BSTRIDE, ptrs, blk_tmp, w, nb, 0, coefs);
+                checkasm_call_new(blk_a, 2 * BSTRIDE, ptrs, blk_tmp, w, nb, 0, coefs);
+                for (int k = 0; k < VT_BLOCK_MAX; k++) {
+                    const uint8_t *c = blk_c + k * 2 * BSTRIDE, *a = blk_a + k * 2 * BSTRIDE;
+                    const int used = k < nb ? w * elem : 0;
+                    /* the sums are in another order than the line kernel's */
+                    if (!used)
+                        ;
+                    else if (f32) {
+                        const float *fc = (const float *)c, *fa = (const float *)a;
+                        for (int j = 0; j < w; j++)
+                            if (!checkasm_float_near_abs_eps_ulp(fc[j], fa[j], 2e-6f, 64)) {
+                                checkasm_fail_func("line %d dst[%d]: %.9g vs %.9g", k, j, fc[j], fa[j]);
+                                break;
+                            }
+                    } else
+                        check_f16((const uint16_t *)c, (const uint16_t *)a, w, 3e-5f);
+                    /* nothing else may be written */
+                    for (int j = used; j < 2 * BSTRIDE; j++)
+                        if (a[j] != 0xaa) {
+                            checkasm_fail_func("write outside the lines, width %d, %d lines", w, nb);
+                            break;
+                        }
+                }
+            }
+        }
+        setup_block_ptrs(ptrs, 0, elem);
+        checkasm_bench_new(blk_a, 2 * BSTRIDE, ptrs, blk_tmp, MAXW, VT_BLOCK_MAX, 0,
+                           p2i_vt_coefs(kind, P2I_SHIFT_CENTER));
+    }
+    checkasm_report("block_%s", f32 ? "f32" : "f16");
+}
+
 void checkasm_test_vt_filter(void)
 {
     test_u8();
@@ -246,4 +310,6 @@ void checkasm_test_vt_filter(void)
         test_block(P2I_KIND_U16, depth, 0);
         test_block(P2I_KIND_U16, depth, 1);
     }
+    test_block_flt(P2I_KIND_F32);
+    test_block_flt(P2I_KIND_F16);
 }

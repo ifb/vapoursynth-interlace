@@ -33,7 +33,9 @@ typedef void (*vt_filter_line_fn)(void *dst, const void *const *src, int width, 
 #define VT_BLOCK_MAX  12
 /* line pointers per frame for a block call */
 #define VT_BLOCK_ROWS (2 * VT_BLOCK_MAX + 18)
-/* block scratch size in bytes */
+/* block scratch size in bytes: the integer kernels' tables and their
+   prepared rows and pairs at 256 bytes each; the float kernels' three row
+   sets at 128 bytes a row fit in it */
 #define VT_BLOCK_TMP  (192 + (VT_BLOCK_ROWS + VT_BLOCK_MAX + 9) * 4 * 64)
 
 /* Filter nb_rows (1..VT_BLOCK_MAX) output lines r, r + 2, ..., which use
@@ -41,8 +43,9 @@ typedef void (*vt_filter_line_fn)(void *dst, const void *const *src, int width, 
  * src: 5 * VT_BLOCK_ROWS line pointers, [t][j] flattened, [t][j] = line
  * r - 9 + j of frame t, edges pre-clamped; all must be valid, even those
  * past 2 * nb_rows + 18. tmp: VT_BLOCK_TMP bytes, 64-byte aligned.
- * Samples must not exceed peak, and width must be at least the getter's
- * min_width. Nothing outside the nb_rows x width output is written. */
+ * Integer samples must not exceed peak, and width must be at least the
+ * getter's min_width. Nothing outside the nb_rows x width output is
+ * written. Float kernels sum in another order than the line kernels. */
 typedef void (*vt_filter_block_fn)(void *dst, ptrdiff_t dst_stride, const void *const *src,
                                    void *tmp, int width, int nb_rows, int peak,
                                    const void *coefs);
@@ -55,7 +58,7 @@ typedef struct vt_filter_t {
 } vt_filter_t;
 
 vt_filter_line_fn p2i_get_vt_filter_fn(int kind, unsigned cpu);
-/* integer kinds only; *min_width = 0 when the C reference is returned */
+/* *min_width = 0 when the C reference is returned */
 vt_filter_block_fn p2i_get_vt_filter_block_fn(int kind, int depth, unsigned cpu, int *min_width);
 void p2i_vt_filter_init(vt_filter_t *f, int kind, int depth, unsigned cpu);
 

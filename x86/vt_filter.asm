@@ -864,6 +864,270 @@ cglobal vt_filter_block_%1, 8, 15, 8, dst, dst_stride, src, tmp, width, nb_rows,
     BLOCK_XLOOP  %1, %2, 0
 %endmacro
 
+; ---------------------------------------------------------------------------
+; Float block kernels: the same two passes with float rows.
+;
+; void vt_filter_block_<f32|f16>(void *dst, ptrdiff_t dst_stride,
+;                                const void *const *src, void *tmp, int width,
+;                                int nb_rows, int peak, const float *coefs)
+;
+; Pass 1 stores, per input row, A = f0 + f4, B = f1 + f3 and C = f2 as FNQ
+; float vectors each (f16 is converted here, once per input row). Pass 2
+; sums 3 x 19 products per output line with FMA, coefficients straight from
+; coefs: c[0][v] for A, c[1][v] for B, c[2][v] for C. A group of LINES
+; output lines is summed at once so that FNQ * LINES accumulator chains
+; hide the FMA latency. With the vertically symmetric set, rows v and
+; 18 - v are added before the multiply.
+;
+; The sums are not in the tap order of the line kernels, so results differ
+; from them by rounding.
+;
+; Scratch at tmp: the A rows, then the B rows, then the C rows, each set
+; FLT_SET bytes: row j, vector q of set s is at
+; tmp + s * FLT_SET + (j * FNQ + q) * mmsize.
+; Registers: m(FNQ * i + q) accumulator of vector q of line i,
+; m(FNQ * LINES) the row being multiplied, m(FNQ * LINES + 1 + i) the
+; coefficient of line i; the first and third of those also hold the
+; pre-adds of the symmetric set, alternately.
+; ---------------------------------------------------------------------------
+
+%define FLT_SET (BLOCK_ROWS * FNQ * mmsize)
+
+; m%2 = vector %4 of the x block of line %3, as floats
+%macro FLT_LOAD 4 ; type, dst, line, vector
+%ifidn %1, f32
+    movu        m%2, [%3 + xq + (%4) * mmsize]
+%else
+    vcvtph2ps   m%2, [%3 + xq + (%4) * mmsize / 2]
+%endif
+%endmacro
+
+; pass 1, one input row
+%macro FLT_PREP 1 ; type
+    mov      line0q, src_line(0, 0)
+    mov      line1q, src_line(4, 0)
+    mov      line2q, src_line(1, 0)
+    mov      line3q, src_line(3, 0)
+    PREFETCH_LINES FLT_XBYTES, line0q, line1q, line2q, line3q
+%assign %%q 0
+%rep FNQ
+%ifidn %1, f32
+    movu         m0, [line0q + xq + %%q * mmsize]
+    addps        m0, [line1q + xq + %%q * mmsize]       ; A = f0 + f4
+    movu         m1, [line2q + xq + %%q * mmsize]
+    addps        m1, [line3q + xq + %%q * mmsize]       ; B = f1 + f3
+%else
+    FLT_LOAD     %1, 0, line0q, %%q
+    FLT_LOAD     %1, 2, line1q, %%q
+    FLT_LOAD     %1, 1, line2q, %%q
+    FLT_LOAD     %1, 3, line3q, %%q
+    addps        m0, m2
+    addps        m1, m3
+%endif
+    mova [outq + %%q * mmsize], m0
+    mova [outq + FLT_SET + %%q * mmsize], m1
+%assign %%q %%q + 1
+%endrep
+    mov      line0q, src_line(2, 0)
+    PREFETCH_LINES FLT_XBYTES, line0q
+%assign %%q 0
+%rep FNQ
+    FLT_LOAD     %1, 0, line0q, %%q                     ; C = f2
+    mova [outq + 2 * FLT_SET + %%q * mmsize], m0
+%assign %%q %%q + 1
+%endrep
+    add        outq, FNQ * mmsize
+%endmacro
+
+; prepared row %2 of set %3 into every line of the group that uses it:
+; line i uses it as tap %2 - 2 * i
+%macro FLT_ROW 3 ; lines, row, set
+%assign %%line 0
+%rep %1
+%assign %%tap (%2) - 2 * %%line
+%if %%tap >= 0 && %%tap < 19
+%assign %%coef_reg FNQ * (%1) + 1 + %%line
+    vbroadcastss m%[%%coef_reg], [coefsq + 4 * (19 * (%3) + %%tap)]
+%endif
+%assign %%line %%line + 1
+%endrep
+%assign %%data_reg FNQ * (%1)
+%assign %%q 0
+%rep FNQ
+    mova  m%[%%data_reg], [inq + (%3) * FLT_SET + ((%2) * FNQ + %%q) * mmsize]
+%assign %%line 0
+%rep %1
+%assign %%tap (%2) - 2 * %%line
+%if %%tap >= 0 && %%tap < 19
+%assign %%acc_reg  FNQ * %%line + %%q
+%assign %%coef_reg FNQ * (%1) + 1 + %%line
+    vfmadd231ps m%[%%acc_reg], m%[%%coef_reg], m%[%%data_reg]
+%endif
+%assign %%line %%line + 1
+%endrep
+%assign %%q %%q + 1
+%endrep
+%endmacro
+
+; symmetric set, tap %2 of set %3 into every line, one coefficient for all
+%macro FLT_MIRROR 3 ; lines, v, set
+%assign %%coef_reg FNQ * (%1) + 1
+    vbroadcastss m%[%%coef_reg], [coefsq + 4 * (19 * (%3) + (%2))]
+%assign %%count 0
+%assign %%q 0
+%rep FNQ
+%assign %%line 0
+%rep %1
+%assign %%acc_reg FNQ * %%line + %%q
+%if (%2) < 9
+%assign %%sum_reg FNQ * (%1) + 2 * (%%count & 1)
+    mova   m%[%%sum_reg], [inq + (%3) * FLT_SET + ((2 * %%line + (%2)) * FNQ + %%q) * mmsize]
+    addps  m%[%%sum_reg], [inq + (%3) * FLT_SET + ((2 * %%line + 18 - (%2)) * FNQ + %%q) * mmsize]
+    vfmadd231ps m%[%%acc_reg], m%[%%coef_reg], m%[%%sum_reg]
+%else
+    vfmadd231ps m%[%%acc_reg], m%[%%coef_reg], [inq + (%3) * FLT_SET + ((2 * %%line + 9) * FNQ + %%q) * mmsize]
+%endif
+%assign %%count %%count + 1
+%assign %%line %%line + 1
+%endrep
+%assign %%q %%q + 1
+%endrep
+%endmacro
+
+; pass 2, a group of lines; the group may run past nb_rows, and those lines
+; are computed but not stored
+%macro FLT_SUM_LINES 3 ; type, lines, vertically symmetric
+%assign %%reg 0
+%rep FNQ * (%2)
+    xorps   m%[%%reg], m%[%%reg]
+%assign %%reg %%reg + 1
+%endrep
+%if %3
+%assign %%v 0
+%rep 10
+    FLT_MIRROR   %2, %%v, 0
+    FLT_MIRROR   %2, %%v, 1
+    FLT_MIRROR   %2, %%v, 2
+%assign %%v %%v + 1
+%endrep
+%else
+%assign %%row 0
+%rep 2 * ((%2) - 1) + 19
+    FLT_ROW      %2, %%row, 0
+    FLT_ROW      %2, %%row, 1
+    FLT_ROW      %2, %%row, 2
+%assign %%row %%row + 1
+%endrep
+%endif
+%assign %%line 0
+%rep %2
+%if %%line
+    lea  next_lineq, [lineq + %%line]
+    cmp  next_lineq, nb_rowsq
+    jge %%done
+%endif
+%assign %%q 0
+%rep FNQ
+%assign %%acc_reg FNQ * %%line + %%q
+%ifidn %1, f32
+    movu [dst_lineq + %%q * mmsize], m%[%%acc_reg]
+%else
+    vcvtps2ph [dst_lineq + %%q * mmsize / 2], m%[%%acc_reg], 4
+%endif
+%assign %%q %%q + 1
+%endrep
+    add   dst_lineq, dst_strideq
+%assign %%line %%line + 1
+%endrep
+%%done:
+%endmacro
+
+%macro FLT_XLOOP 3 ; type, lines, symmetric
+.xloop_%3:
+    DEFINE_ARGS dst, dst_stride, src, tmp, last_x, nb_rows, nb_prep, coefs, x, row, line0, line1, line2, line3, out
+    mov        outq, tmpq
+    xor        rowd, rowd
+.prep_%3:
+    FLT_PREP     %1
+    inc        rowd
+    cmp        rowd, nb_prepd
+    jl .prep_%3
+
+    DEFINE_ARGS dst, dst_stride, src, tmp, last_x, nb_rows, nb_prep, coefs, x, line, in, dst_line, next_line
+    mov         inq, tmpq
+    lea   dst_lineq, [dstq + xq]
+    xor       lined, lined
+.sum_%3:
+    FLT_SUM_LINES %1, %2, %3
+    add         inq, 2 * %2 * FNQ * mmsize
+    add       lined, %2
+    cmp       lined, nb_rowsd
+    jl .sum_%3
+
+    ; next x block; the last one is moved back to end at width
+    cmp          xq, last_xq
+    je .end_%3
+    add          xq, FLT_XBYTES
+    cmp          xq, last_xq
+    jle .xloop_%3
+    mov          xq, last_xq
+    jmp .xloop_%3
+.end_%3:
+    RET
+%endmacro
+
+%macro VT_BLOCK_FLT 3 ; type, vectors per x block, lines per group
+%define FNQ %2
+%ifidn %1, f32
+%define FLT_XBYTES (%2 * mmsize)
+%else
+%define FLT_XBYTES (%2 * mmsize / 2)
+%endif
+cglobal vt_filter_block_%1, 8, 15, %2 * %3 + 1 + %3, dst, dst_stride, src, tmp, width, nb_rows, peak, coefs, x
+    movsxdifnidn widthq, widthd
+    movsxdifnidn nb_rowsq, nb_rowsd
+    DEFINE_ARGS dst, dst_stride, src, tmp, last_x, nb_rows, nb_prep, coefs, x
+%ifidn %1, f32
+    shl     last_xq, 2
+%else
+    add     last_xq, last_xq
+%endif
+    sub     last_xq, FLT_XBYTES                 ; last_x = bytes of width - bytes per x block
+    ; rows to prepare: 2 * (nb_rows rounded up to the group) + 18
+    xor     nb_prepd, nb_prepd
+.round:
+    add     nb_prepd, %3
+    cmp     nb_prepd, nb_rowsd
+    jl .round
+    lea     nb_prepd, [nb_prepq * 2 + 18]
+    ; vertically symmetric coefficients
+%assign %%i 0
+%rep 3
+%assign %%v 0
+%rep 9
+    mov          xd, [coefsq + 4 * (19 * %%i + %%v)]
+    cmp          xd, [coefsq + 4 * (19 * %%i + 18 - %%v)]
+    jne .generic
+%assign %%v %%v + 1
+%endrep
+%assign %%i %%i + 1
+%endrep
+    xor          xd, xd
+    FLT_XLOOP    %1, %3, 1
+.generic:
+    xor          xd, xd
+    FLT_XLOOP    %1, %3, 0
+%endmacro
+
+; an x block is 64 bytes of each input row, which measured best for both
+; types on every CPU tried; f16 at ymm has registers for 3 lines only
+INIT_YMM avx2
+VT_BLOCK_FLT f32, 2, 4
+VT_BLOCK_FLT f16, 4, 3
+INIT_ZMM avx512
+VT_BLOCK_FLT f32, 1, 4
+VT_BLOCK_FLT f16, 2, 4
+
 INIT_XMM sse2
 VT_BLOCK u8, 0
 VT_BLOCK u16, 0

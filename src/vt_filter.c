@@ -140,6 +140,8 @@ static void vt_filter_block_##name(void *dst, ptrdiff_t dst_stride, const void *
 
 VT_BLOCK_C(u8)
 VT_BLOCK_C(u16)
+VT_BLOCK_C(f32)
+VT_BLOCK_C(f16)
 
 #if defined(__x86_64__)
 #define HAVE_X86_ASM 1
@@ -164,6 +166,13 @@ DECL_BLOCK(avx2)
 DECL_BLOCK(avxvnni)
 DECL_BLOCK(avx512)
 DECL_BLOCK(avx512icl)
+#define DECL_BLOCK_FLT(isa) \
+    void p2i_vt_filter_block_f32_##isa(void *, ptrdiff_t, const void *const *, void *, int, \
+                                       int, int, const void *);                             \
+    void p2i_vt_filter_block_f16_##isa(void *, ptrdiff_t, const void *const *, void *, int, \
+                                       int, int, const void *);
+DECL_BLOCK_FLT(avx2)
+DECL_BLOCK_FLT(avx512)
 void p2i_vt_filter_block_u16n_avx512(void *, ptrdiff_t, const void *const *, void *, int, int, int,
                                      const void *);
 void p2i_vt_filter_block_u16n_avx512icl(void *, ptrdiff_t, const void *const *, void *, int, int,
@@ -204,10 +213,25 @@ vt_filter_line_fn p2i_get_vt_filter_fn(int kind, unsigned cpu)
 
 vt_filter_block_fn p2i_get_vt_filter_block_fn(int kind, int depth, unsigned cpu, int *min_width)
 {
-    const int u8 = kind == P2I_KIND_U8;
-    vt_filter_block_fn fn = u8 ? vt_filter_block_u8 : vt_filter_block_u16;
+    vt_filter_block_fn fn;
     *min_width = 0;
     cpu |= P2I_CPU_BUILTIN;
+    if (kind == P2I_KIND_F32 || kind == P2I_KIND_F16) {
+        const int f32 = kind == P2I_KIND_F32;
+        fn = f32 ? vt_filter_block_f32 : vt_filter_block_f16;
+#if HAVE_X86_ASM
+        /* one x block: 64 bytes of samples */
+        if (cpu & P2I_CPU_AVX2) {
+            fn = f32 ? p2i_vt_filter_block_f32_avx2 : p2i_vt_filter_block_f16_avx2;
+            *min_width = f32 ? 16 : 32;
+        }
+        if (cpu & P2I_CPU_AVX512)
+            fn = f32 ? p2i_vt_filter_block_f32_avx512 : p2i_vt_filter_block_f16_avx512;
+#endif
+        return fn;
+    }
+    const int u8 = kind == P2I_KIND_U8;
+    fn = u8 ? vt_filter_block_u8 : vt_filter_block_u16;
 #if HAVE_X86_ASM
     /* the kernels add sample pairs in int16 */
     if (depth > 14)
@@ -245,10 +269,7 @@ void p2i_vt_filter_init(vt_filter_t *f, int kind, int depth, unsigned cpu)
 {
     f->bytes = kind == P2I_KIND_U8 ? 1 : kind == P2I_KIND_F32 ? 4 : 2;
     f->line = p2i_get_vt_filter_fn(kind, cpu);
-    f->block = NULL;
-    f->block_min_width = 0;
-    if (kind == P2I_KIND_U8 || kind == P2I_KIND_U16)
-        f->block = p2i_get_vt_filter_block_fn(kind, depth, cpu, &f->block_min_width);
+    f->block = p2i_get_vt_filter_block_fn(kind, depth, cpu, &f->block_min_width);
 }
 
 /* bytes of each input line per tile, and the band size from which to tile */

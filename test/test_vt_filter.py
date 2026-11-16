@@ -104,6 +104,28 @@ for fmt, dtype, peak, w, h in [(vs.YUV420P8, np.uint8, 255, 144, 52),
                     assert np.array_equal(got[p], want[p][n]), (fmt, tff, level, n, p)
     print(f'{src.format.name} {w}x{h}: bit-exact vs reference at every cpu level')
 
+# float planes wide enough for the block kernels, which sum in another
+# order than the reference: 4:2:0 for the sited sets, luma for the centre one
+for fmt, dtype, atol, w, h in [(vs.YUV420PS, np.float32, 1e-5, 144, 52),
+                               (vs.YUV420PH, np.float16, 2e-3, 208, 76)]:
+    src = core.std.BlankClip(format=fmt, width=w, height=h, length=6, fpsnum=50, fpsden=1)
+    frames = [[rng.random((h >> (p and 1), w >> (p and 1))).astype(dtype) for p in range(3)]
+              for _ in range(6)]
+    src = core.std.ModifyFrame(src, src, lambda n, f, frames=frames: (
+        lambda fo: ([np.copyto(np.asarray(fo[p]), frames[n][p]) for p in range(3)], fo)[1]
+    )(f.copy()))
+    for tff in (True, False):
+        want = [ref([fr[p].astype(np.float64) for fr in frames], tff, False, None,
+                    (CF_S['M125'], CF_S['P125']) if p else None) for p in range(3)]
+        for level in LEVELS:
+            out = core.interlace.Interlace(src, tff=tff, cpu=level)
+            for n in range(3):
+                got = planes(out, n)
+                for p in range(3):
+                    assert np.allclose(got[p].astype(np.float64), want[p][n], rtol=0, atol=atol), \
+                        (fmt, tff, level, n, p)
+    print(f'{src.format.name} {w}x{h}: matches reference within {atol:g} at every cpu level')
+
 frames = [[rng.random((12, 24), np.float32)] for _ in range(9)]
 src = core.std.BlankClip(format=vs.GRAYS, width=24, height=12, length=9, fpsnum=50, fpsden=1)
 src = core.std.ModifyFrame(src, src, lambda n, f: (
