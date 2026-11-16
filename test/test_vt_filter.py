@@ -81,14 +81,18 @@ for fmt, dtype, peak in [(vs.GRAY8, np.uint8, 255), (vs.GRAY16, np.uint16, 65535
     print(f'{src.format.name}: bit-exact vs reference (both field orders)')
 
 # wide enough for the block kernels, with several bands of lines and a
-# partial last one; every cpu level against the reference
+# partial last one; every cpu level against the reference. Samples go up
+# to top - 1: past peak at 15 bits, whose kernels clamp like the reference.
 LEVELS = ('none', 'sse2', 'avx2', 'avxvnni', 'avx512', 'avx512icl')
-for fmt, dtype, peak, w, h in [(vs.YUV420P8, np.uint8, 255, 144, 52),
-                               (vs.YUV422P10, np.uint16, 1023, 160, 30),
-                               (vs.YUV420P14, np.uint16, 16383, 136, 76)]:
+YUV422P15 = core.query_video_format(vs.YUV, vs.INTEGER, 15, 1, 0).id
+for fmt, dtype, peak, top, w, h in [(vs.YUV420P8, np.uint8, 255, 256, 144, 52),
+                                    (vs.YUV422P10, np.uint16, 1023, 1024, 160, 30),
+                                    (vs.YUV420P14, np.uint16, 16383, 16384, 136, 76),
+                                    (YUV422P15, np.uint16, 32767, 65536, 160, 30),
+                                    (vs.YUV420P16, np.uint16, 65535, 65536, 136, 76)]:
     src = core.std.BlankClip(format=fmt, width=w, height=h, length=6, fpsnum=50, fpsden=1)
     sw, sh = src.format.subsampling_w, src.format.subsampling_h
-    frames = [[rng.integers(0, peak + 1, (h >> (p and sh), w >> (p and sw)), dtype=dtype)
+    frames = [[rng.integers(0, top, (h >> (p and sh), w >> (p and sw)), dtype=dtype)
                for p in range(3)] for _ in range(6)]
     src = core.std.ModifyFrame(src, src, lambda n, f, frames=frames: (
         lambda fo: ([np.copyto(np.asarray(fo[p]), frames[n][p]) for p in range(3)], fo)[1]

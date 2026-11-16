@@ -197,8 +197,9 @@ static void test_block(int kind, int depth, int slow)
     if (checkasm_check_func(p2i_get_vt_filter_block_fn(kind, depth, cpu, &min_width),
                             "vt_filter_block_u%d%s", depth, slow ? "n" : "")) {
         INITIALIZE_BUF(src_buf);
-        /* the kernels require samples <= peak */
-        if (kind == P2I_KIND_U16) {
+        /* up to 14 bits the kernels require samples <= peak; above, leave
+           the buffer full-range so that 15 bits tests the clamp */
+        if (kind == P2I_KIND_U16 && depth <= 14) {
             uint16_t *s = (uint16_t *)src_buf;
             for (size_t i = 0; i < sizeof(src_buf) / 2; i++)
                 s[i] &= peak;
@@ -306,9 +307,10 @@ void checkasm_test_vt_filter(void)
     test_f32();
     test_f16();
     test_block(P2I_KIND_U8, 8, 0);
-    for (int depth = 10; depth <= 14; depth += 2) {
-        test_block(P2I_KIND_U16, depth, 0);
-        test_block(P2I_KIND_U16, depth, 1);
+    static const int depths[] = { 10, 12, 14, 15, 16 };
+    for (int i = 0; i < (int)(sizeof(depths) / sizeof(depths[0])); i++) {
+        test_block(P2I_KIND_U16, depths[i], 0);
+        test_block(P2I_KIND_U16, depths[i], 1);
     }
     test_block_flt(P2I_KIND_F32);
     test_block_flt(P2I_KIND_F16);

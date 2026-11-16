@@ -33,18 +33,18 @@ typedef void (*vt_filter_line_fn)(void *dst, const void *const *src, int width, 
 #define VT_BLOCK_MAX  12
 /* line pointers per frame for a block call */
 #define VT_BLOCK_ROWS (2 * VT_BLOCK_MAX + 18)
-/* block scratch size in bytes: the integer kernels' tables and their
-   prepared rows and pairs at 256 bytes each; the float kernels' three row
-   sets at 128 bytes a row fit in it */
-#define VT_BLOCK_TMP  (192 + (VT_BLOCK_ROWS + VT_BLOCK_MAX + 9) * 4 * 64)
+/* block scratch size in bytes: the integer kernels' tables, their prepared
+   rows at up to 512 bytes each and pairs at 256; the float kernels' three
+   row sets at 128 bytes a row fit in it */
+#define VT_BLOCK_TMP  (192 + (2 * VT_BLOCK_ROWS + VT_BLOCK_MAX + 9) * 4 * 64)
 
 /* Filter nb_rows (1..VT_BLOCK_MAX) output lines r, r + 2, ..., which use
  * the same frames and coefficients; line k goes to dst + k * dst_stride.
  * src: 5 * VT_BLOCK_ROWS line pointers, [t][j] flattened, [t][j] = line
  * r - 9 + j of frame t, edges pre-clamped; all must be valid, even those
  * past 2 * nb_rows + 18. tmp: VT_BLOCK_TMP bytes, 64-byte aligned.
- * Integer samples must not exceed peak, and width must be at least the
- * getter's min_width. Nothing outside the nb_rows x width output is
+ * At 14 bits and below, samples must not exceed peak. width must be at
+ * least the getter's min_width. Nothing outside the nb_rows x width output is
  * written. Float kernels sum in another order than the line kernels. */
 typedef void (*vt_filter_block_fn)(void *dst, ptrdiff_t dst_stride, const void *const *src,
                                    void *tmp, int width, int nb_rows, int peak,

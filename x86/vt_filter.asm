@@ -223,28 +223,36 @@ VT_F16
 ; The fold keeps u16 sums in int16 for peak < 1 << 14 (and the vertical
 ; pre-add for peak < 1 << 13), so u16 samples must not exceed peak.
 ;
+; The u16h kernels, for 15 and 16 bits, do not fold. Samples are biased to
+; int16 as in the line kernel, and an (A, B) row holds the pairs (f0, f1)
+; and then (f4, f3), both for coefficient pair (c[0][v], c[1][v]): 48
+; multiplies per output line instead of 29. No pre-add, no input limit.
+;
 ; An x block is one vector per input row for u8 and two for u16. The u16n
-; kernels are u16 with one vector per x block, for zmm on Zen 4: two zmm
+; and u16hn kernels are u16 and u16h with one vector per x block, for zmm
+; on Zen 4: two zmm
 ; are two cache lines per input row, which costs it more in cache misses
 ; than the wider block saves. A prepared row holds the block as NQ vectors
-; of dwords, its "quarters" (4, or 2 for u16n), in the order
+; of dwords, its "quarters" (4, or 2 for u16n and u16hn), in the order
 ; punpck{l,h}{bw,wd} leave them; the packs of the final store undo that
 ; order.
 ;
 ; Scratch buffer at tmp (64-byte aligned):
 ;   0               coefficient table, 29 dwords (BLOCK_COEF_TABLE)
-;   SCRATCH_PEAK    peak as words, one vector (u16 only)
+;   SCRATCH_PEAK    peak as words, one vector (u16 only; biased for u16h)
 ;   SCRATCH_AB      (A, B) rows j = 0 .. 2 * nb_rows + 17
 ;   SCRATCH_C       C pairs p = 0 .. nb_rows + 8
-; A prepared row is PREP_ROW = NQ * mmsize bytes: (A, B) row j, quarter q
-; is at SCRATCH_AB + (NQ * j + q) * mmsize, and C pairs likewise.
+; A prepared C pair is PREP_ROW = NQ * mmsize bytes, C pair p, quarter q at
+; SCRATCH_C + (NQ * p + q) * mmsize. An (A, B) row is AB_ROW bytes, AB_VECS
+; vectors: NQ, or 2 * NQ for u16h, vector i adding to quarter i % NQ.
 ; ---------------------------------------------------------------------------
 
 %define BLOCK_ROWS    (2 * VT_BLOCK_MAX + 18)    ; line pointers per frame
-%define PREP_ROW      (NQ * mmsize)               ; bytes per prepared row
+%define PREP_ROW      (NQ * mmsize)               ; bytes per prepared C pair
+%define AB_ROW        (AB_VECS * mmsize)          ; bytes per prepared (A, B) row
 %define SCRATCH_PEAK  128
 %define SCRATCH_AB    192
-%define SCRATCH_C     (SCRATCH_AB + BLOCK_ROWS * PREP_ROW)
+%define SCRATCH_C     (SCRATCH_AB + BLOCK_ROWS * AB_ROW)
 
 ; coefficient pair of (A, B) row v and of C pair p in the table
 %define coef_ab(v)    [tmpq + 4 * (v)]
@@ -256,6 +264,8 @@ VT_F16
 ; pass 1 constants (u8)
 %define ONES          m6                          ; bytes of 1, for pmaddubsw
 %define ZERO          m7
+; pass 1 constant (u16h)
+%define BIAS          m6                          ; words of 0x8000
 
 ; Register names per phase. r0-r3 and r5 keep their meaning; width is turned
 ; into last_x in place; peak, coefs and the rest are reused once free.
@@ -366,7 +376,7 @@ VT_F16
     mova [ab_outq + 1 * mmsize], m0
     mova [ab_outq + 2 * mmsize], m1
     mova [ab_outq + 3 * mmsize], m2
-    add     ab_outq, PREP_ROW
+    add     ab_outq, AB_ROW
 %endmacro
 
 %macro PREP_C_U8 0
@@ -418,7 +428,7 @@ VT_F16
     mova [ab_outq + 1 * mmsize], m0
     mova [ab_outq + 2 * mmsize], m2
     mova [ab_outq + 3 * mmsize], m1
-    add     ab_outq, PREP_ROW
+    add     ab_outq, AB_ROW
 %endmacro
 
 %macro PREP_C_U16 0
@@ -453,7 +463,7 @@ VT_F16
     punpckhwd    m0, m2
     mova [ab_outq + 0 * mmsize], m4
     mova [ab_outq + 1 * mmsize], m0
-    add     ab_outq, PREP_ROW
+    add     ab_outq, AB_ROW
 %endmacro
 
 %macro PREP_C_U16N 0
@@ -466,6 +476,60 @@ VT_F16
     punpckhwd    m0, m2
     mova  [c_outq + 0 * mmsize], m4
     mova  [c_outq + 1 * mmsize], m0
+    add      c_outq, PREP_ROW
+%endmacro
+
+; u16h: m%1 = the u16 vector at %2 + x + %3, biased to int16
+%macro LOAD_BIAS 3 ; dst, line, offset
+%if avx_enabled
+    pxor        m%1, BIAS, [%2 + xq + %3]
+%else
+    movu        m%1, [%2 + xq + %3]
+    pxor        m%1, BIAS
+%endif
+%endmacro
+
+; u16h: the NQ quarters of the pairs (line a, line b) to %3
+%macro PREP_PAIRS_U16H 3 ; line a, line b, out
+%if NQ == 4
+    LOAD_BIAS     0, %1, 0
+    LOAD_BIAS     1, %1, mmsize
+    LOAD_BIAS     2, %2, 0
+    LOAD_BIAS     3, %2, mmsize
+    punpcklwd    m4, m0, m2
+    punpckhwd    m0, m2
+    punpcklwd    m2, m1, m3
+    punpckhwd    m1, m3
+    mova [%3 + 0 * mmsize], m4
+    mova [%3 + 1 * mmsize], m0
+    mova [%3 + 2 * mmsize], m2
+    mova [%3 + 3 * mmsize], m1
+%else
+    LOAD_BIAS     0, %1, 0
+    LOAD_BIAS     2, %2, 0
+    punpcklwd    m4, m0, m2
+    punpckhwd    m0, m2
+    mova [%3 + 0 * mmsize], m4
+    mova [%3 + 1 * mmsize], m0
+%endif
+%endmacro
+
+%macro PREP_AB_U16H 1 ; row offset
+    mov      line0q, src_line(0, %1)
+    mov      line1q, src_line(1, %1)
+    mov      line2q, src_line(4, %1)
+    mov      line3q, src_line(3, %1)
+    PREFETCH_LINES NQ / 2 * mmsize, line0q, line1q, line2q, line3q
+    PREP_PAIRS_U16H line0q, line1q, ab_outq                 ; (f0, f1)
+    PREP_PAIRS_U16H line2q, line3q, ab_outq + PREP_ROW      ; (f4, f3)
+    add     ab_outq, AB_ROW
+%endmacro
+
+%macro PREP_C_U16H 0
+    mov      line0q, src_line(2, 0)
+    mov      line1q, src_line(2, 1)
+    PREFETCH_LINES NQ / 2 * mmsize, line0q, line1q
+    PREP_PAIRS_U16H line0q, line1q, c_outq
     add      c_outq, PREP_ROW
 %endmacro
 
@@ -489,7 +553,20 @@ VT_F16
 ; >> 13, clamp and store the line held in the NQ accumulators (quarters)
 ; m%2 .. m%2 + NQ - 1
 %macro STORE_LINE 2 ; type, first accumulator
-%if NQ == 2
+%ifidn %1, u16h
+%assign %%quarter 0
+%rep NQ / 2
+%assign %%acc0 %2 + 2 * %%quarter
+%assign %%acc1 %%acc0 + 1
+    psrad     m%[%%acc0], 13
+    psrad     m%[%%acc1], 13
+    packssdw  m%[%%acc0], m%[%%acc1]                    ; clamps at 0 (biased)
+    pminsw    m%[%%acc0], [tmpq + SCRATCH_PEAK]
+    pxor      m%[%%acc0], [pw_8000]
+    movu [dst_lineq + %%quarter * mmsize], m%[%%acc0]
+%assign %%quarter %%quarter + 1
+%endrep
+%elif NQ == 2
 %assign %%acc0 %2
 %assign %%acc1 %2 + 1
     psrad     m%[%%acc0], 13
@@ -528,14 +605,15 @@ VT_F16
 ; pmaddwd version, one line at a time:
 ;   m0 .. m(NQ - 1) accumulators (quarters), m4 coefficient pair, m5 product
 
-; acc += coef . row, for prepared row %3 of the rows at %2
-%macro PMADDWD_ROW 3 ; coefficient pair, rows base, row
+; acc += coef . row, for prepared row %3 of the rows at %2, %4 vectors each
+%macro PMADDWD_ROW 4 ; coefficient pair, rows base, row, vectors per row
     COEF_PD      m4, %1
-%assign %%quarter 0
-%rep NQ
-    pmaddwd      m5, m4, [%2 + ((%3) * NQ + %%quarter) * mmsize]
+%assign %%vec 0
+%rep %4
+%assign %%quarter %%vec % NQ
+    pmaddwd      m5, m4, [%2 + ((%3) * (%4) + %%vec) * mmsize]
     paddd   m%[%%quarter], m5
-%assign %%quarter %%quarter + 1
+%assign %%vec %%vec + 1
 %endrep
 %endmacro
 
@@ -575,13 +653,13 @@ VT_F16
 %else
 %assign %%v 0
 %rep 19
-    PMADDWD_ROW  coef_ab(%%v), ab_inq, %%v
+    PMADDWD_ROW  coef_ab(%%v), ab_inq, %%v, AB_VECS
 %assign %%v %%v + 1
 %endrep
 %endif
 %assign %%p 0
 %rep 10
-    PMADDWD_ROW  coef_c(%%p), c_inq, %%p
+    PMADDWD_ROW  coef_c(%%p), c_inq, %%p, NQ
 %assign %%p %%p + 1
 %endrep
     STORE_LINE   %1, 0
@@ -621,10 +699,10 @@ VT_F16
     VNNI_DPWSSD m%[%%acc_reg], m%[%%coef_reg], %5
 %endmacro
 
-; Prepared row %2 (of the rows at %6) into every line of the group that uses
-; it: line i uses it as tap t = %2 - %3 * i if 0 <= t < %4, with coefficient
-; pair %5 + t of the table.
-%macro VNNI_ROW 6 ; lines, row, rows per line, taps, first coefficient, rows base
+; Prepared row %2 (of the rows at %6, %7 vectors each) into every line of
+; the group that uses it: line i uses it as tap t = %2 - %3 * i if
+; 0 <= t < %4, with coefficient pair %5 + t of the table.
+%macro VNNI_ROW 7 ; lines, row, rows per line, taps, first coefficient, rows base, vectors
 %assign %%line 0
 %rep %1
 %assign %%tap (%2) - (%3) * %%line
@@ -634,18 +712,18 @@ VT_F16
 %assign %%line %%line + 1
 %endrep
 %assign %%data_reg NQ * (%1)
-%assign %%quarter 0
-%rep NQ
-    mova  m%[%%data_reg], [%6 + ((%2) * NQ + %%quarter) * mmsize]
+%assign %%vec 0
+%rep %7
+    mova  m%[%%data_reg], [%6 + ((%2) * (%7) + %%vec) * mmsize]
 %assign %%line 0
 %rep %1
 %assign %%tap (%2) - (%3) * %%line
 %if %%tap >= 0 && %%tap < (%4)
-    VNNI_DOT     %1, %%line, %%quarter, %%line, m%[%%data_reg]
+    VNNI_DOT     %1, %%line, %%vec % NQ, %%line, m%[%%data_reg]
 %endif
 %assign %%line %%line + 1
 %endrep
-%assign %%quarter %%quarter + 1
+%assign %%vec %%vec + 1
 %endrep
 %endmacro
 
@@ -653,7 +731,7 @@ VT_F16
 %macro VNNI_SUM_AB 1 ; lines
 %assign %%row 0
 %rep 2 * ((%1) - 1) + 19
-    VNNI_ROW     %1, %%row, 2, 19, 0, ab_inq
+    VNNI_ROW     %1, %%row, 2, 19, 0, ab_inq, AB_VECS
 %assign %%row %%row + 1
 %endrep
 %endmacro
@@ -695,7 +773,7 @@ VT_F16
 %macro VNNI_SUM_C 1 ; lines
 %assign %%pair 0
 %rep (%1) + 9
-    VNNI_ROW     %1, %%pair, 1, 10, 19, c_inq
+    VNNI_ROW     %1, %%pair, 1, 10, 19, c_inq, NQ
 %assign %%pair %%pair + 1
 %endrep
 %endmacro
@@ -740,6 +818,8 @@ VT_F16
     mova       ONES, [pb_1]
 %endif
     pxor       ZERO, ZERO
+%elifidn %1, u16h
+    mova       BIAS, [pw_8000]
 %endif
     lea     ab_outq, [tmpq + SCRATCH_AB]
     lea      c_outq, [tmpq + SCRATCH_C]
@@ -753,6 +833,10 @@ VT_F16
     PREP_AB_U16N  0
     PREP_AB_U16N  1
     PREP_C_U16N
+%elifidn %1, u16h
+    PREP_AB_U16H  0
+    PREP_AB_U16H  1
+    PREP_C_U16H
 %else
     PREP_AB_U16   0
     PREP_AB_U16   1
@@ -770,13 +854,13 @@ VT_F16
 .sum_%2_%3:
 %if %2
     SUM_LINES_VNNI %1, %2, %3
-    add      ab_inq, 2 * %2 * PREP_ROW
+    add      ab_inq, 2 * %2 * AB_ROW
     add       c_inq, %2 * PREP_ROW
     add       lined, %2
 %else
     SUM_LINE_PMADDWD %1, %3
     add   dst_lineq, dst_strideq
-    add      ab_inq, 2 * PREP_ROW
+    add      ab_inq, 2 * AB_ROW
     add       c_inq, PREP_ROW
     inc       lined
 %endif
@@ -815,17 +899,30 @@ VT_F16
 %endmacro
 
 ; %2: lines per vpdpwssd group, 0 for the pmaddwd version
-%macro VT_BLOCK 2 ; type, lines
-%ifidn %1, u16n
-%define NQ 2
+; %3: quarters, 2 for one vector per input row per x block (u16 only)
+; u16hn is u16h with 2 quarters
+%macro VT_BLOCK 2-3 4 ; type, lines, quarters
+%define NQ %3
+%ifidn %1, u16h
+%define AB_VECS (2 * NQ)
+%elifidn %1, u16hn
+%define AB_VECS (2 * NQ)
 %else
-%define NQ 4
+%define AB_VECS NQ
 %endif
 %if %2
 cglobal vt_filter_block_%1, 8, 15, NQ * %2 + 1 + %2, dst, dst_stride, src, tmp, width, nb_rows, peak, coefs, pair, pair_hi
 %else
 cglobal vt_filter_block_%1, 8, 15, 8, dst, dst_stride, src, tmp, width, nb_rows, peak, coefs, pair, pair_hi
 %endif
+%ifidn %1, u16hn
+    VT_BLOCK_BODY u16h, %2
+%else
+    VT_BLOCK_BODY %1, %2
+%endif
+%endmacro
+
+%macro VT_BLOCK_BODY 2 ; type, lines
     BLOCK_COEF_TABLE
     movsxdifnidn widthq, widthd
     movsxdifnidn nb_rowsq, nb_rowsd
@@ -833,6 +930,9 @@ cglobal vt_filter_block_%1, 8, 15, 8, dst, dst_stride, src, tmp, width, nb_rows,
 %ifidn %1, u8
     sub     last_xq, mmsize                     ; last_x = width - mmsize
 %else
+%ifidn %1, u16h
+    sub       peakd, 32768
+%endif
     movd        xm0, peakd
 %if cpuflag(avx2)
     vpbroadcastw m0, xm0
@@ -845,6 +945,10 @@ cglobal vt_filter_block_%1, 8, 15, 8, dst, dst_stride, src, tmp, width, nb_rows,
     sub     last_xq, NQ / 2 * mmsize
 %endif
     xor          xd, xd
+%ifidn %1, u16h
+    COUNT_PREP_ROWS %2
+    BLOCK_XLOOP  %1, %2, 0
+%else
     ; vertically symmetric (A, B) coefficients, and room for the pre-add
 %ifnidn %1, u8
     cmp       peakd, (1 << 13) - 1
@@ -862,6 +966,7 @@ cglobal vt_filter_block_%1, 8, 15, 8, dst, dst_stride, src, tmp, width, nb_rows,
 .generic:
     COUNT_PREP_ROWS %2
     BLOCK_XLOOP  %1, %2, 0
+%endif
 %endmacro
 
 ; ---------------------------------------------------------------------------
@@ -1131,17 +1236,24 @@ VT_BLOCK_FLT f16, 2, 4
 INIT_XMM sse2
 VT_BLOCK u8, 0
 VT_BLOCK u16, 0
+VT_BLOCK u16h, 0
 INIT_YMM avx2
 VT_BLOCK u8, 0
 VT_BLOCK u16, 0
+VT_BLOCK u16h, 0
 INIT_YMM avxvnni
 VT_BLOCK u8, 3
 VT_BLOCK u16, 3
+VT_BLOCK u16h, 3
 INIT_ZMM avx512
 VT_BLOCK u8, 0
 VT_BLOCK u16, 0
-VT_BLOCK u16n, 0
+VT_BLOCK u16n, 0, 2
+VT_BLOCK u16h, 0
+VT_BLOCK u16hn, 0, 2
 INIT_ZMM avx512icl
 VT_BLOCK u8, 4
 VT_BLOCK u16, 4
-VT_BLOCK u16n, 4
+VT_BLOCK u16n, 4, 2
+VT_BLOCK u16h, 4
+VT_BLOCK u16hn, 4, 2
