@@ -243,12 +243,17 @@ vt_filter_block_fn p2i_get_vt_filter_block_fn(int kind, int depth, unsigned cpu,
 
 void p2i_vt_filter_init(vt_filter_t *f, int kind, int depth, unsigned cpu)
 {
+    f->bytes = kind == P2I_KIND_U8 ? 1 : kind == P2I_KIND_F32 ? 4 : 2;
     f->line = p2i_get_vt_filter_fn(kind, cpu);
     f->block = NULL;
     f->block_min_width = 0;
     if (kind == P2I_KIND_U8 || kind == P2I_KIND_U16)
         f->block = p2i_get_vt_filter_block_fn(kind, depth, cpu, &f->block_min_width);
 }
+
+/* bytes of each input line per tile, and the band size from which to tile */
+#define VT_TILE_BYTES 512
+#define VT_TILE_BAND  (512 << 10)
 
 static int clip_line(int line, int rows)
 {
@@ -266,21 +271,42 @@ void p2i_vt_filter_plane(const vt_filter_t *f, uint8_t *dst, ptrdiff_t dst_strid
     if (f->block_min_width && width >= f->block_min_width) {
         uint8_t tmp_buf[VT_BLOCK_TMP + 63];
         void *tmp = (void *)(((uintptr_t)tmp_buf + 63) & ~(uintptr_t)63);
+        /* A band of block calls reads VT_BLOCK_ROWS lines of 6 frames.
+           Where that is more than a small L2 holds, go through it in x
+           tiles, so that the second parity finds the 4 frames it shares
+           with the first in cache. */
+        int tile = width;
+        if ((VT_TAPS_T + 1) * VT_BLOCK_ROWS * width * f->bytes > VT_TILE_BAND) {
+            tile = VT_TILE_BYTES / f->bytes;
+            if (tile < f->block_min_width)
+                tile = f->block_min_width;
+        }
 
-        /* both parities of a band in turn: the second finds the 4 frames
-           they share in cache */
-        for (int r0 = 0; r0 < rows; r0 += 2 * VT_BLOCK_MAX)
-            for (int r = r0; r < r0 + 2 && r < rows; r++) {
+        for (int r0 = 0; r0 < rows; r0 += 2 * VT_BLOCK_MAX) {
+            const uint8_t *lines[2][VT_TAPS_T * VT_BLOCK_ROWS];
+            int n[2] = { 0, 0 };
+            for (int p = 0; p < 2 && r0 + p < rows; p++) {
+                const int r = r0 + p;
                 const int left = (rows - r + 1) / 2;
                 const int o = (r & 1) ^ top_off;
-                const void *ptrs[VT_TAPS_T * VT_BLOCK_ROWS];
+                n[p] = left < VT_BLOCK_MAX ? left : VT_BLOCK_MAX;
                 for (int t = 0; t < VT_TAPS_T; t++)
                     for (int j = 0; j < VT_BLOCK_ROWS; j++)
-                        ptrs[t * VT_BLOCK_ROWS + j] = base[o + t] +
+                        lines[p][t * VT_BLOCK_ROWS + j] = base[o + t] +
                             clip_line(r + j - VT_TAPS_V / 2, rows) * stride[o + t];
-                f->block(dst + r * dst_stride, 2 * dst_stride, ptrs, tmp, width,
-                         left < VT_BLOCK_MAX ? left : VT_BLOCK_MAX, peak, coefs[r & 1]);
             }
+            for (int x0 = 0; x0 < width;) {
+                const int w = width - x0 >= tile + f->block_min_width ? tile : width - x0;
+                for (int p = 0; p < 2 && n[p]; p++) {
+                    const void *ptrs[VT_TAPS_T * VT_BLOCK_ROWS];
+                    for (int i = 0; i < VT_TAPS_T * VT_BLOCK_ROWS; i++)
+                        ptrs[i] = lines[p][i] + x0 * f->bytes;
+                    f->block(dst + (r0 + p) * dst_stride + x0 * f->bytes, 2 * dst_stride, ptrs,
+                             tmp, w, n[p], peak, coefs[(r0 + p) & 1]);
+                }
+                x0 += w;
+            }
+        }
         return;
     }
 

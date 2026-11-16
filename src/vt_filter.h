@@ -51,6 +51,7 @@ typedef struct vt_filter_t {
     vt_filter_line_fn line;
     vt_filter_block_fn block;
     int block_min_width;        /* 0: no block kernel, filter line by line */
+    int bytes;                  /* per sample */
 } vt_filter_t;
 
 vt_filter_line_fn p2i_get_vt_filter_fn(int kind, unsigned cpu);
