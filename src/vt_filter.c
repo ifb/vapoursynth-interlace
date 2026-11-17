@@ -121,27 +121,67 @@ static void vt_filter_line_f16(void *dstv, const void *const *srcv, int width, i
     }
 }
 
-/* reference: one line call per output line */
-#define VT_BLOCK_C(name) \
-static void vt_filter_block_##name(void *dst, ptrdiff_t dst_stride, const void *const *src, \
-                                   void *tmp, int width, int nb_rows, int peak,             \
-                                   const void *coefs)                                       \
-{                                                                                           \
-    (void)tmp;                                                                              \
-    for (int k = 0; k < nb_rows; k++) {                                                     \
-        const void *ptrs[VT_SRC_PTRS];                                                      \
-        for (int t = 0; t < VT_TAPS_T; t++)                                                 \
-            for (int v = 0; v < VT_TAPS_V; v++)                                             \
-                ptrs[t * VT_TAPS_V + v] = src[t * VT_BLOCK_ROWS + 2 * k + v];               \
-        ptrs[VT_SRC_PTRS - 1] = ptrs[VT_SRC_PTRS - 2];                                      \
-        vt_filter_line_##name((uint8_t *)dst + k * dst_stride, ptrs, width, peak, coefs);   \
-    }                                                                                       \
-}
+#define VT_INT 1
+#define coef_t int16_t
+#define acc_t int32_t
+#define LOAD(x) (x)
 
-VT_BLOCK_C(u8)
-VT_BLOCK_C(u16)
-VT_BLOCK_C(f32)
-VT_BLOCK_C(f16)
+#define pixel uint8_t
+#define row_t int16_t
+#define VT_BX 64
+#define FUNC(name) name##_u8
+#include "vt_block_tmpl.h"
+#undef pixel
+#undef row_t
+#undef VT_BX
+#undef FUNC
+
+#define pixel uint16_t
+#define row_t int32_t
+#define VT_BX 32
+#define FUNC(name) name##_u16
+#include "vt_block_tmpl.h"
+#undef pixel
+#undef row_t
+#undef FUNC
+
+#undef VT_INT
+#undef coef_t
+#undef acc_t
+#define VT_INT 0
+#define coef_t float
+#define acc_t float
+#define row_t float
+
+#define pixel float
+#define STORE(x) (x)
+#define FUNC(name) name##_f32
+#include "vt_block_tmpl.h"
+#undef pixel
+#undef LOAD
+#undef STORE
+#undef FUNC
+
+#if defined(__aarch64__)
+#define pixel __fp16
+#define LOAD(x) (float)(x)
+#define STORE(x) (__fp16)(x)
+#else
+#define pixel uint16_t
+#define LOAD(x) f16_to_f32(x)
+#define STORE(x) f32_to_f16(x)
+#endif
+#define FUNC(name) name##_f16
+#include "vt_block_tmpl.h"
+#undef pixel
+#undef LOAD
+#undef STORE
+#undef FUNC
+#undef VT_INT
+#undef coef_t
+#undef acc_t
+#undef row_t
+#undef VT_BX
 
 #if defined(__x86_64__)
 #define HAVE_X86_ASM 1
@@ -222,7 +262,7 @@ vt_filter_line_fn p2i_get_vt_filter_fn(int kind, unsigned cpu)
 vt_filter_block_fn p2i_get_vt_filter_block_fn(int kind, int depth, unsigned cpu, int *min_width)
 {
     vt_filter_block_fn fn;
-    *min_width = 0;
+    *min_width = 1;
     cpu |= P2I_CPU_BUILTIN;
     if (kind == P2I_KIND_F32 || kind == P2I_KIND_F16) {
         const int f32 = kind == P2I_KIND_F32;

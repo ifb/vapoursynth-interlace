@@ -58,7 +58,6 @@ typedef struct vt_filter_t {
 } vt_filter_t;
 
 vt_filter_line_fn p2i_get_vt_filter_fn(int kind, unsigned cpu);
-/* *min_width = 0 when the C reference is returned */
 vt_filter_block_fn p2i_get_vt_filter_block_fn(int kind, int depth, unsigned cpu, int *min_width);
 void p2i_vt_filter_init(vt_filter_t *f, int kind, int depth, unsigned cpu);
 
