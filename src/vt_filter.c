@@ -213,6 +213,8 @@ vt_filter_line_fn p2i_get_vt_filter_fn(int kind, unsigned cpu)
         fn = fns_avx2[kind];
     if (cpu & P2I_CPU_AVX512)
         fn = fns_avx512[kind];
+#else
+    (void)cpu;
 #endif
     return fn;
 }
@@ -266,6 +268,7 @@ vt_filter_block_fn p2i_get_vt_filter_block_fn(int kind, int depth, unsigned cpu,
     }
 #undef SET_BLOCK
 #else
+    (void)cpu;
     (void)depth;
 #endif
     return fn;
