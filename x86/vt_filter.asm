@@ -186,9 +186,9 @@ cglobal vt_filter_line_f16, 5, 9, 3, dst, src, w, peak, coef, x, k, ptra, rem
     jne %%whole
     kmovw        k1, k2
 %%whole:
-    vcvtps2ph [dstq + xq]{k1}, m0, 4
+    vcvtps2ph [dstq + xq]{k1}, m0, 0
 %else
-    vcvtps2ph [dstq + xq], m0, 4
+    vcvtps2ph [dstq + xq], m0, 0
 %endif
     add          xq, mmsize/2
     dec          wd
@@ -1137,7 +1137,7 @@ cglobal vt_filter_block_%1, 8, 15, 8, dst, dst_stride, src, tmp, width, nb_rows,
 %ifidn %1, f32
     movu [dst_lineq + %%q * mmsize], m%[%%acc_reg]
 %else
-    vcvtps2ph [dst_lineq + %%q * mmsize / 2], m%[%%acc_reg], 4
+    vcvtps2ph [dst_lineq + %%q * mmsize / 2], m%[%%acc_reg], 0
 %endif
 %assign %%q %%q + 1
 %endrep

@@ -1,3 +1,4 @@
+#include <fenv.h>
 #include <math.h>
 #include <stdint.h>
 #include <string.h>
@@ -136,6 +137,33 @@ static void check_f16(const uint16_t *hc, const uint16_t *ha, int w, float eps)
     }
 }
 
+/* constant input comes back unchanged however MXCSR rounds: the f16 store
+   must round to nearest even */
+static const uint16_t const_f16[] = { 0x3a00, 0x3555, 0xb8e3, 0x0400 };
+static const struct { int mode; const char *name; } round_modes[] = {
+    { FE_DOWNWARD, "FE_DOWNWARD" }, { FE_UPWARD, "FE_UPWARD" }, { FE_TOWARDZERO, "FE_TOWARDZERO" },
+};
+#define NCONST (int)(sizeof(const_f16) / sizeof(const_f16[0]))
+#define NMODES (int)(sizeof(round_modes) / sizeof(round_modes[0]))
+
+static void fill_f16(uint16_t v)
+{
+    uint16_t *h = (uint16_t *)src_buf;
+    for (size_t i = 0; i < sizeof(src_buf) / 2; i++)
+        h[i] = v;
+}
+
+static int check_f16_const(const uint16_t *dst, int w, uint16_t v, int m)
+{
+    for (int j = 0; j < w; j++)
+        if (dst[j] != v) {
+            checkasm_fail_func("%s (%d): dst[%d] 0x%04x, want 0x%04x",
+                               round_modes[m].name, round_modes[m].mode, j, dst[j], v);
+            return 0;
+        }
+    return 1;
+}
+
 static void test_f16(void)
 {
     const void *ptrs[VT_SRC_PTRS];
@@ -161,6 +189,16 @@ static void test_f16(void)
                 check_f16((const uint16_t *)dst_c, (const uint16_t *)dst_a,
                           widths[i], phase ? 3e-5f : 2.0f);
             }
+        }
+        for (int i = 0; i < NCONST * NMODES; i++) {
+            const uint16_t v = const_f16[i % NCONST];
+            fill_f16(v);
+            setup_ptrs(ptrs, i, 2);
+            fesetround(round_modes[i / NCONST].mode);
+            checkasm_call_new(dst_a, ptrs, 71, 0, p2i_vt_coefs(P2I_KIND_F16, i % P2I_NB_SHIFTS));
+            fesetround(FE_TONEAREST);
+            if (!check_f16_const((const uint16_t *)dst_a, 71, v, i / NCONST))
+                break;
         }
         setup_ptrs(ptrs, 0, 2);
         checkasm_bench_new(dst_a, ptrs, 1920, 0, p2i_vt_coefs(P2I_KIND_F16, P2I_SHIFT_CENTER));
@@ -292,6 +330,22 @@ static void test_block_flt(int kind)
                         }
                 }
             }
+        }
+        for (int i = 0; !f32 && i < NCONST * NMODES; i++) {
+            const uint16_t v = const_f16[i % NCONST];
+            const int w = min_width > 71 ? min_width : 71;
+            fill_f16(v);
+            setup_block_ptrs(ptrs, i, elem);
+            fesetround(round_modes[i / NCONST].mode);
+            checkasm_call_new(blk_a, 2 * BSTRIDE, ptrs, blk_tmp, w, VT_BLOCK_MAX, 0,
+                              p2i_vt_coefs(kind, i % P2I_NB_SHIFTS));
+            fesetround(FE_TONEAREST);
+            int ok = 1;
+            for (int k = 0; ok && k < VT_BLOCK_MAX; k++)
+                ok = check_f16_const((const uint16_t *)(blk_a + k * 2 * BSTRIDE), w, v,
+                                     i / NCONST);
+            if (!ok)
+                break;
         }
         setup_block_ptrs(ptrs, 0, elem);
         checkasm_bench_new(blk_a, 2 * BSTRIDE, ptrs, blk_tmp, MAXW, VT_BLOCK_MAX, 0,
