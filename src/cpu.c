@@ -32,6 +32,7 @@ unsigned p2i_cpu_detect(void)
         family += (r[0] >> 20) & 0xff;
     if (X(r[3], 0x06008000)) /* CMOV/SSE/SSE2 */
         flags |= P2I_CPU_SSE2;
+    const int fma_f16c = X(r[2], 0x20001000); /* FMA/F16C */
 
     if (X(r[2], 0x18000000) && max_leaf >= 7) { /* OSXSAVE/AVX */
         const uint64_t xcr0 = p2i_cpu_xgetbv(0);
@@ -40,7 +41,9 @@ unsigned p2i_cpu_detect(void)
             const unsigned max_subleaf = r[0];
             if (X(r[1], 0x00000128)) /* BMI1/BMI2/AVX2 */
                 flags |= P2I_CPU_AVX2;
-            if (X(xcr0, 0x000000e0) && /* opmask/ZMM state */
+            if ((flags & P2I_CPU_AVX2) && fma_f16c)
+                flags |= P2I_CPU_FMA;
+            if ((flags & P2I_CPU_FMA) && X(xcr0, 0x000000e0) && /* opmask/ZMM state */
                 X(r[1], 0xd0030000)) { /* F/DQ/CD/BW/VL */
                 flags |= P2I_CPU_AVX512;
                 if (amd && family == 0x19) /* Zen 4 */

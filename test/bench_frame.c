@@ -84,7 +84,7 @@ static void filter_plane(const vt_filter_t *vt, uint8_t *dst, ptrdiff_t dst_stri
 int main(int argc, char **argv)
 {
     const int reps = argc > 1 ? atoi(argv[1]) : 9;
-    /* optional mask, e.g. 0x3 for sse2+avx2 */
+    /* optional mask, e.g. 0x43 for sse2+avx2+fma */
     const unsigned cpu = p2i_cpu_detect() & (argc > 2 ? (unsigned)strtoul(argv[2], NULL, 0) : ~0u);
 
     static const struct geom geoms[] = {
@@ -100,9 +100,10 @@ int main(int argc, char **argv)
         { "YUV420PH ", P2I_KIND_F16, 2,     0, 1, 1 },
     };
 
-    printf("cpu: %s%s%s%s%s%s\n",
+    printf("cpu: %s%s%s%s%s%s%s\n",
            cpu & P2I_CPU_SSE2 ? "sse2 " : "",
            cpu & P2I_CPU_AVX2 ? "avx2 " : "",
+           cpu & P2I_CPU_FMA ? "fma " : "",
            cpu & P2I_CPU_AVXVNNI ? "avxvnni " : "",
            cpu & P2I_CPU_AVX512 ? "avx512 " : "",
            cpu & P2I_CPU_AVX512ICL ? "avx512icl " : "",

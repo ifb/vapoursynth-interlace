@@ -184,11 +184,12 @@ static void VS_CC p2i_create(const VSMap *in, VSMap *out, void *user_data, VSCor
         static const struct { const char *name; unsigned mask; } levels[] = {
             { "none",      0 },
             { "sse2",      P2I_CPU_SSE2 },
-            { "avx2",      P2I_CPU_SSE2 | P2I_CPU_AVX2 },
-            { "avxvnni",   P2I_CPU_SSE2 | P2I_CPU_AVX2 | P2I_CPU_AVXVNNI },
-            { "avx512",    P2I_CPU_SSE2 | P2I_CPU_AVX2 | P2I_CPU_AVX512 | P2I_CPU_SLOW_AVX512 },
-            { "avx512icl", P2I_CPU_SSE2 | P2I_CPU_AVX2 | P2I_CPU_AVX512 | P2I_CPU_AVX512ICL |
+            { "avx2",      P2I_CPU_SSE2 | P2I_CPU_AVX2 | P2I_CPU_FMA },
+            { "avxvnni",   P2I_CPU_SSE2 | P2I_CPU_AVX2 | P2I_CPU_FMA | P2I_CPU_AVXVNNI },
+            { "avx512",    P2I_CPU_SSE2 | P2I_CPU_AVX2 | P2I_CPU_FMA | P2I_CPU_AVX512 |
                            P2I_CPU_SLOW_AVX512 },
+            { "avx512icl", P2I_CPU_SSE2 | P2I_CPU_AVX2 | P2I_CPU_FMA | P2I_CPU_AVX512 |
+                           P2I_CPU_AVX512ICL | P2I_CPU_SLOW_AVX512 },
         };
         const int nb_levels = sizeof(levels) / sizeof(*levels);
         int i;

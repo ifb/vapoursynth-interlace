@@ -9,6 +9,9 @@
 /* Zen 4: a zmm is two 256-bit halves. Not a tier: kernels that measure
  * faster there in a narrower form test it alongside P2I_CPU_AVX512. */
 #define P2I_CPU_SLOW_AVX512 (1 << 5)
+/* FMA3 and F16C, with AVX2. The Centaur CNR (VIA Eden X4, Zhaoxin ZX-C+)
+ * has AVX2 without FMA3. */
+#define P2I_CPU_FMA       (1 << 6)
 
 unsigned p2i_cpu_detect(void);
 
@@ -19,7 +22,7 @@ unsigned p2i_cpu_detect(void);
  * guarantees nothing here: checkasm, linked against it, gets its C
  * reference by passing no flags. */
 #if defined(__AVX2__) && defined(__FMA__) && defined(__BMI2__) && defined(__F16C__)
-#define P2I_CPU_BUILTIN_AVX2 (P2I_CPU_AVX2 | P2I_CPU_SSE2)
+#define P2I_CPU_BUILTIN_AVX2 (P2I_CPU_AVX2 | P2I_CPU_FMA | P2I_CPU_SSE2)
 #else
 #define P2I_CPU_BUILTIN_AVX2 0
 #endif
