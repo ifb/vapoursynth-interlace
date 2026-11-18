@@ -14,11 +14,10 @@ enum {
 /* fractional vertical delay of the coefficient set, in chroma rows;
    moves subsampled chroma onto the interlaced siting grid */
 enum {
-    P2I_SHIFT_M375,
-    P2I_SHIFT_M125,
+    P2I_SHIFT_M250,
     P2I_SHIFT_CENTER,
-    P2I_SHIFT_P125,
-    P2I_SHIFT_P375,
+    P2I_SHIFT_P250,
+    P2I_NB_SHIFTS,
 };
 
 /* src: VT_TAPS_T * VT_TAPS_V line pointers, [t][v] flattened, edges
@@ -62,10 +61,10 @@ vt_filter_block_fn p2i_get_vt_filter_block_fn(int kind, int depth, unsigned cpu,
 void p2i_vt_filter_init(vt_filter_t *f, int kind, int depth, unsigned cpu);
 
 /* Filter one plane of an output frame. base/stride: the plane in input
- * frames 2n-2 .. 2n+3; coefs: per output line parity. */
+ * frames 2n-2 .. 2n+3. */
 void p2i_vt_filter_plane(const vt_filter_t *f, uint8_t *dst, ptrdiff_t dst_stride,
                          const uint8_t *const *base, const ptrdiff_t *stride,
-                         int width, int rows, int tff, int peak, const void *const *coefs);
+                         int width, int rows, int tff, int peak, const void *coefs);
 const void *p2i_vt_coefs(int kind, int shift);
 
 #endif

@@ -39,7 +39,7 @@ static void test_u8(void)
             setup_ptrs(ptrs, i, 1);
             memset(dst_c, 0xaa, sizeof(dst_c));
             memset(dst_a, 0x55, sizeof(dst_a));
-            const void *coefs = p2i_vt_coefs(P2I_KIND_U8, i % 5);
+            const void *coefs = p2i_vt_coefs(P2I_KIND_U8, i % P2I_NB_SHIFTS);
             checkasm_call_ref(dst_c, ptrs, widths[i], 255, coefs);
             checkasm_call_new(dst_a, ptrs, widths[i], 255, coefs);
             checkasm_check1d(uint8_t, dst_c, dst_a, widths[i], "dst");
@@ -65,7 +65,7 @@ static void test_u16(void)
             memset(dst_c, 0xaa, sizeof(dst_c));
             memset(dst_a, 0x55, sizeof(dst_a));
             const int peak = peaks[i % 3];
-            const void *coefs = p2i_vt_coefs(P2I_KIND_U16, i % 5);
+            const void *coefs = p2i_vt_coefs(P2I_KIND_U16, i / 3 % P2I_NB_SHIFTS);
             checkasm_call_ref(dst_c, ptrs, widths[i], peak, coefs);
             checkasm_call_new(dst_a, ptrs, widths[i], peak, coefs);
             checkasm_check1d(uint16_t, (uint16_t *)dst_c, (uint16_t *)dst_a, widths[i], "dst");
@@ -91,7 +91,7 @@ static void test_f32(void)
             setup_ptrs(ptrs, i, 4);
             memset(dst_c, 0xaa, sizeof(dst_c));
             memset(dst_a, 0x55, sizeof(dst_a));
-            const void *coefs = p2i_vt_coefs(P2I_KIND_F32, i % 5);
+            const void *coefs = p2i_vt_coefs(P2I_KIND_F32, i % P2I_NB_SHIFTS);
             checkasm_call_ref(dst_c, ptrs, widths[i], 0, coefs);
             checkasm_call_new(dst_a, ptrs, widths[i], 0, coefs);
             /* AVX2 up accumulates with FMA: one rounding fewer per tap than
@@ -155,7 +155,7 @@ static void test_f16(void)
                 setup_ptrs(ptrs, i, 2);
                 memset(dst_c, 0xaa, sizeof(dst_c));
                 memset(dst_a, 0x55, sizeof(dst_a));
-                const void *coefs = p2i_vt_coefs(P2I_KIND_F16, i % 5);
+                const void *coefs = p2i_vt_coefs(P2I_KIND_F16, i % P2I_NB_SHIFTS);
                 checkasm_call_ref(dst_c, ptrs, widths[i], 0, coefs);
                 checkasm_call_new(dst_a, ptrs, widths[i], 0, coefs);
                 check_f16((const uint16_t *)dst_c, (const uint16_t *)dst_a,
@@ -206,7 +206,7 @@ static void test_block(int kind, int depth, int slow)
         }
         for (int i = 0; i < NWIDTHS; i++) {
             const int w = widths[i];
-            const void *coefs = p2i_vt_coefs(kind, i % 5);
+            const void *coefs = p2i_vt_coefs(kind, i % P2I_NB_SHIFTS);
             if (w < min_width)
                 continue;
             for (int nb = 1 + i % 3; nb <= VT_BLOCK_MAX; nb += 1 + i % 5) {
@@ -260,7 +260,7 @@ static void test_block_flt(int kind)
         }
         for (int i = 0; i < NWIDTHS; i++) {
             const int w = widths[i];
-            const void *coefs = p2i_vt_coefs(kind, i % 5);
+            const void *coefs = p2i_vt_coefs(kind, i % P2I_NB_SHIFTS);
             if (w < min_width)
                 continue;
             for (int nb = 1 + i % 3; nb <= VT_BLOCK_MAX; nb += 1 + i % 5) {

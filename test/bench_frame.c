@@ -77,9 +77,8 @@ static void filter_plane(const vt_filter_t *vt, uint8_t *dst, ptrdiff_t dst_stri
                          int rows, int width, int peak, const void *coefs, int tff)
 {
     const ptrdiff_t strides[WINDOW] = { stride, stride, stride, stride, stride, stride };
-    const void *both[2] = { coefs, coefs };
     p2i_vt_filter_plane(vt, dst, dst_stride, (const uint8_t *const *)base, strides, width,
-                        rows, tff, peak, both);
+                        rows, tff, peak, coefs);
 }
 
 int main(int argc, char **argv)

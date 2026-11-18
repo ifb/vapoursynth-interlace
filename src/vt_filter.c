@@ -10,13 +10,11 @@
 #include "vt_filter.h"
 
 /* [shift][taps], ordered as the P2I_SHIFT_* enum */
-static const int16_t coefs_i16[5][96] = {
-    { VT_COEFS_M375_I16 }, { VT_COEFS_M125_I16 }, { VT_COEFS_I16 },
-    { VT_COEFS_P125_I16 }, { VT_COEFS_P375_I16 },
+static const int16_t coefs_i16[P2I_NB_SHIFTS][96] = {
+    { VT_COEFS_M250_I16 }, { VT_COEFS_I16 }, { VT_COEFS_P250_I16 },
 };
-static const float coefs_f32[5][96] = {
-    { VT_COEFS_M375_F32 }, { VT_COEFS_M125_F32 }, { VT_COEFS_F32 },
-    { VT_COEFS_P125_F32 }, { VT_COEFS_P375_F32 },
+static const float coefs_f32[P2I_NB_SHIFTS][96] = {
+    { VT_COEFS_M250_F32 }, { VT_COEFS_F32 }, { VT_COEFS_P250_F32 },
 };
 
 const void *p2i_vt_coefs(int kind, int shift)
@@ -334,7 +332,7 @@ static int clip_line(int line, int rows)
    VT-filtered; line edges repeated */
 void p2i_vt_filter_plane(const vt_filter_t *f, uint8_t *dst, ptrdiff_t dst_stride,
                          const uint8_t *const *base, const ptrdiff_t *stride,
-                         int width, int rows, int tff, int peak, const void *const *coefs)
+                         int width, int rows, int tff, int peak, const void *coefs)
 {
     const int top_off = !tff;
 
@@ -372,7 +370,7 @@ void p2i_vt_filter_plane(const vt_filter_t *f, uint8_t *dst, ptrdiff_t dst_strid
                     for (int i = 0; i < VT_TAPS_T * VT_BLOCK_ROWS; i++)
                         ptrs[i] = lines[p][i] + x0 * f->bytes;
                     f->block(dst + (r0 + p) * dst_stride + x0 * f->bytes, 2 * dst_stride, ptrs,
-                             tmp, w, n[p], peak, coefs[(r0 + p) & 1]);
+                             tmp, w, n[p], peak, coefs);
                 }
                 x0 += w;
             }
@@ -388,6 +386,6 @@ void p2i_vt_filter_plane(const vt_filter_t *f, uint8_t *dst, ptrdiff_t dst_strid
                 ptrs[t * VT_TAPS_V + v] = base[o + t] +
                     clip_line(r + v - VT_TAPS_V / 2, rows) * stride[o + t];
         ptrs[VT_SRC_PTRS - 1] = ptrs[VT_SRC_PTRS - 2];
-        f->line(dst + r * dst_stride, ptrs, width, peak, coefs[r & 1]);
+        f->line(dst + r * dst_stride, ptrs, width, peak, coefs);
     }
 }

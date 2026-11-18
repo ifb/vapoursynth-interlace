@@ -10,7 +10,7 @@
 # usage: vt_filter_design.py bands.png vt_coeffs.h [--bits N] [--ripple-db X]
 #                            [--response out.png]
 
-SHIFTS = [-0.375, -0.125, 0.125, 0.375]   # chroma rows
+SHIFTS = [-0.25, 0.25]   # chroma rows
 
 import sys
 

@@ -54,11 +54,14 @@ can differ from C by a few ulp (~1e-6 relative).
 
 Progressive 4:2:0 sites chroma relative to luma per `_ChromaLocation`.
 Interlaced 4:2:0 sites each field's chroma at the ¼/¾ positions between the
-field's luma lines. The filter honors the input `_ChromaLocation`
+field's luma lines, which is where progressive left/center chroma already
+is. The filter honors the input `_ChromaLocation`
 (left/center/topleft/top/bottomleft/bottom; assumed left when absent) and
-**resamples vertically subsampled chroma onto the interlaced siting grid**
+**resamples top- and bottom-sited chroma onto the interlaced siting grid**
 inside the same vertical-temporal convolution - fractionally delayed
-variants of the same kernel, at no extra cost.
+variants of the same filter, at no extra cost. Filtered 4:2:0 chroma is
+therefore always sited left or center, and tagged to match. `filter=False`
+moves no chroma and keeps the input tag.
 
 Chroma bandwidth note: subsampled chroma gets the same filter at its own
 lattice (the cutoff sits at the same fraction of the halved chroma Nyquist).

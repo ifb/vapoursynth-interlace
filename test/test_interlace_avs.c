@@ -194,6 +194,84 @@ static void test_weave(void)
     avs_release_value(src);
 }
 
+/* chroma ramp of vertical position in frame lines * 256 */
+static void test_chroma_siting(void)
+{
+    static const char *const voff_expr[6] = { "128", "128", "0", "0", "256", "256" };
+    const int w = 256, h = 96;
+
+    for (int cl = 0; cl < 6; cl++) {
+        AVS_Value bc[5] = { avs_new_value_int(w), avs_new_value_int(h),
+                            avs_new_value_string("YUV420P16"),
+                            avs_new_value_int(0), avs_new_value_int(8) };
+        const char *bcn[5] = { "width", "height", "pixel_type", "color_yuv", "length" };
+        AVS_Value blank = avs_invoke(env, "BlankClip", avs_new_value_array(bc, 5),
+                                     (const char **)bcn);
+        if (avs_is_error(blank)) {
+            fprintf(stderr, "skip chroma siting: %s\n", avs_as_error(blank));
+            return;
+        }
+        char uv[64];
+        snprintf(uv, sizeof(uv), "sy 512 * %s +", voff_expr[cl]);
+        AVS_Value ea[4] = { blank, avs_new_value_string("512"),
+                            avs_new_value_string(uv), avs_new_value_string(uv) };
+        AVS_Value ramp = avs_invoke(env, "Expr", avs_new_value_array(ea, 4), NULL);
+        avs_release_value(blank);
+        AVS_Value pa[3] = { ramp, avs_new_value_string("_ChromaLocation"),
+                            avs_new_value_int(cl) };
+        AVS_Value src = avs_invoke(env, "propSet", avs_new_value_array(pa, 3), NULL);
+        avs_release_value(ramp);
+        if (avs_is_error(src)) {
+            CHECK(0, "chroma siting source: %s", avs_as_error(src));
+            avs_release_value(src);
+            return;
+        }
+
+        for (int tff = 0; tff < 2; tff++) {
+            AVS_Value out = interlace(src, tff, 1);
+            if (avs_is_error(out)) {
+                CHECK(0, "chroma siting: %s", avs_as_error(out));
+                avs_release_value(out);
+                continue;
+            }
+            AVS_Clip *c = avs_take_clip(out, env);
+            AVS_VideoFrame *f = avs_get_frame(c, 1);
+            if (!f) {
+                CHECK(0, "chroma siting: frame fetch failed");
+            } else {
+                int err = 0;
+                const int64_t ocl = avs_prop_get_int(env, avs_get_frame_props_ro(env, f),
+                                                     "_ChromaLocation", 0, &err);
+                CHECK(!err && ocl == (cl & 1), "_ChromaLocation %d -> %lld, want %d",
+                      cl, (long long)ocl, cl & 1);
+                const int planes[2] = { AVS_PLANAR_U, AVS_PLANAR_V };
+                for (int p = 0; p < 2; p++) {
+                    const uint8_t *base = avs_get_read_ptr_p(f, planes[p]);
+                    const int pitch = avs_get_pitch_p(f, planes[p]);
+                    for (int r = 12; r < h / 2 - 12; r++) {
+                        const uint16_t *row = (const uint16_t *)(base + (ptrdiff_t)r * pitch);
+                        const int want = 512 * r + 128;
+                        const int tol = (cl >> 1) ? 2 : 0;
+                        int x;
+                        for (x = 0; x < w / 2; x++)
+                            if (abs(row[x] - want) > tol)
+                                break;
+                        if (x < w / 2) {
+                            CHECK(0, "chroma siting %d tff %d plane %d row %d: %d, want %d",
+                                  cl, tff, p + 1, r, row[x], want);
+                            r = h;
+                        }
+                    }
+                }
+                avs_release_video_frame(f);
+            }
+            avs_release_clip(c);
+            avs_release_value(out);
+        }
+        avs_release_value(src);
+    }
+}
+
 static void expect_error(const char *what, AVS_Value clip, int tff, int filter)
 {
     AVS_Value out = interlace(clip, tff, filter);
@@ -329,6 +407,7 @@ int main(int argc, char **argv)
     test_vi();
     test_bff();
     test_weave();
+    test_chroma_siting();
     test_validation();
     if (argc > 2)
         test_vs_reference(argv[2]);

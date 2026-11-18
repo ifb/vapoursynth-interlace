@@ -30,13 +30,11 @@ struct p2i_filter_t {
     vt_filter_t vt;
 };
 
-/* interlaced 4:2:0 sites field chroma at 1/4 and 3/4 between the field's luma
- * lines; the shift from the progressive position depends on the progressive
- * vertical siting class of _ChromaLocation. In chroma rows, y[r] = x[r+s]. */
-static const int chroma_shift[3][2] = { /* [vclass][bottom] */
-    { P2I_SHIFT_M125, P2I_SHIFT_P125 }, /* left/center: chroma between lines */
-    { P2I_SHIFT_P125, P2I_SHIFT_P375 }, /* topleft/top: co-sited with line 0 */
-    { P2I_SHIFT_M375, P2I_SHIFT_M125 }, /* bottomleft/bottom */
+/* interlaced 4:2:0 chroma row r is at frame line 2r + 1/2 in both fields */
+static const int chroma_shift[3] = { /* [vclass] */
+    P2I_SHIFT_CENTER,   /* left/center */
+    P2I_SHIFT_P250,     /* topleft/top */
+    P2I_SHIFT_M250,     /* bottomleft/bottom */
 };
 
 static const VSFrame *VS_CC p2i_get_frame(int n, int activation_reason, void *instance_data,
@@ -79,7 +77,7 @@ static const VSFrame *VS_CC p2i_get_frame(int n, int activation_reason, void *in
 
     int err;
     int64_t cloc = 0;
-    const void *chroma_coefs[2] = { NULL, NULL };
+    const void *chroma_coefs = NULL;
     if (f->chroma_sited) {
         cloc = vsapi->mapGetInt(vsapi->getFramePropertiesRO(first), "_ChromaLocation", 0, &err);
         if (err)
@@ -91,8 +89,7 @@ static const VSFrame *VS_CC p2i_get_frame(int n, int activation_reason, void *in
             return NULL;
         }
         /* left/center 0,1 -> vclass 0; topleft/top 2,3 -> 1; bottom* 4,5 -> 2 */
-        for (int b = 0; b < 2; b++)
-            chroma_coefs[b] = p2i_vt_coefs(f->kind, chroma_shift[cloc >> 1][b]);
+        chroma_coefs = p2i_vt_coefs(f->kind, chroma_shift[cloc >> 1]);
     }
 
     VSFrame *dst = vsapi->newVideoFrame(&f->vi.format, f->vi.width, f->vi.height, first, core);
@@ -122,12 +119,8 @@ static const VSFrame *VS_CC p2i_get_frame(int n, int activation_reason, void *in
             stride[k] = vsapi->getStride(src[k], plane);
         }
 
-        const void *center = p2i_vt_coefs(f->kind, P2I_SHIFT_CENTER);
-        const void *coefs[2] = { center, center };
-        if (plane > 0 && f->chroma_sited) {
-            coefs[0] = chroma_coefs[0];
-            coefs[1] = chroma_coefs[1];
-        }
+        const void *coefs = plane > 0 && f->chroma_sited ? chroma_coefs
+                                                         : p2i_vt_coefs(f->kind, P2I_SHIFT_CENTER);
         p2i_vt_filter_plane(&f->vt, dstp, dst_stride, base, stride, width, rows, f->tff,
                             f->peak, coefs);
     }

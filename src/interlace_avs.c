@@ -34,12 +34,11 @@ enum {
     P2I_CLOC_BOTTOM,
 };
 
-/* see interlace.c: the shift from the progressive chroma position depends
-   on the vertical siting class of _ChromaLocation */
-static const int chroma_shift[3][2] = { /* [vclass][bottom] */
-    { P2I_SHIFT_M125, P2I_SHIFT_P125 },
-    { P2I_SHIFT_P125, P2I_SHIFT_P375 },
-    { P2I_SHIFT_M375, P2I_SHIFT_M125 },
+/* see interlace.c */
+static const int chroma_shift[3] = { /* [vclass] */
+    P2I_SHIFT_CENTER,
+    P2I_SHIFT_P250,
+    P2I_SHIFT_M250,
 };
 
 typedef struct p2i_avs_t p2i_avs_t;
@@ -84,7 +83,7 @@ static AVS_VideoFrame *AVSC_CC p2i_avs_get_frame(AVS_FilterInfo *fi, int n)
     AVS_VideoFrame *bottom = f->tff ? second : first;
 
     int64_t cloc = P2I_CLOC_LEFT;
-    const void *chroma_coefs[2] = { NULL, NULL };
+    const void *chroma_coefs = NULL;
     if (f->chroma_sited) {
         const AVS_Map *props = avs_get_frame_props_ro(env, first);
         int err = 0;
@@ -97,8 +96,7 @@ static AVS_VideoFrame *AVSC_CC p2i_avs_get_frame(AVS_FilterInfo *fi, int n)
             fi->error = "Interlace: unsupported _ChromaLocation";
             return NULL;
         }
-        for (int b = 0; b < 2; b++)
-            chroma_coefs[b] = p2i_vt_coefs(f->kind, chroma_shift[cloc >> 1][b]);
+        chroma_coefs = p2i_vt_coefs(f->kind, chroma_shift[cloc >> 1]);
     }
 
     AVS_VideoFrame *dst = avs_new_video_frame_p(env, &fi->vi, first);
@@ -130,12 +128,8 @@ static AVS_VideoFrame *AVSC_CC p2i_avs_get_frame(AVS_FilterInfo *fi, int n)
             stride[k] = avs_get_pitch_p(src[k], plane);
         }
 
-        const void *center = p2i_vt_coefs(f->kind, P2I_SHIFT_CENTER);
-        const void *coefs[2] = { center, center };
-        if (p > 0 && f->chroma_sited) {
-            coefs[0] = chroma_coefs[0];
-            coefs[1] = chroma_coefs[1];
-        }
+        const void *coefs = p > 0 && f->chroma_sited ? chroma_coefs
+                                                     : p2i_vt_coefs(f->kind, P2I_SHIFT_CENTER);
         p2i_vt_filter_plane(&f->vt, dstp, dst_stride, base, stride, width, rows, f->tff,
                             f->peak, coefs);
     }
